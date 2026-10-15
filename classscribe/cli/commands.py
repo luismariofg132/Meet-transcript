@@ -1,0 +1,171 @@
+import argparse
+import json
+import logging
+import math
+import sys
+from pathlib import Path
+
+from classscribe import __version__
+from classscribe.audio.devices import select_device
+from classscribe.audio.recorder import record_session
+from classscribe.audio.wasapi import WasapiBackend
+from classscribe.config import DEVICES, MODELS, Settings, load_settings
+from classscribe.sessions.manager import SessionManager
+from classscribe.storage import timestamp
+
+
+def positive_seconds(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        raise argparse.ArgumentTypeError("Duration must be a positive number of seconds")
+    return number
+
+
+def parser() -> argparse.ArgumentParser:
+    root = argparse.ArgumentParser(
+        prog="classscribe", description="Record locally, transcribe afterwards"
+    )
+    root.add_argument("--version", action="version", version=__version__)
+    root.add_argument(
+        "--config", type=Path, help="TOML settings (default: ./classscribe.toml if present)"
+    )
+    commands = root.add_subparsers(dest="command", required=True)
+    commands.add_parser("devices", help="List WASAPI loopbacks and microphones")
+    doctor = commands.add_parser(
+        "doctor", help="Inspect setup; --device also runs actual inference"
+    )
+    doctor.add_argument("--json", action="store_true", help="Print structured diagnostic JSON")
+    record = commands.add_parser(
+        "record", help="Record until Ctrl+C; inference never runs during capture"
+    )
+    record.add_argument("--title", required=True)
+    record.add_argument("--course", default="")
+    record.add_argument("--output-device", help="Loopback ID or exact name from devices")
+    record.add_argument("--microphone-device", help="Microphone ID or exact name from devices")
+    record.add_argument("--microphone", action=argparse.BooleanOptionalAction, default=None)
+    record.add_argument("--transcribe", action="store_true")
+    record.add_argument("--duration", type=positive_seconds, help="Stop after this many seconds")
+    transcribe = commands.add_parser(
+        "transcribe", help="Create a new transcription run for a session"
+    )
+    transcribe.add_argument("session_id", help="Full session ID or exact session directory name")
+    for command in (record, transcribe, doctor):
+        command.add_argument("--device", choices=DEVICES, default=None)
+        command.add_argument("--model", choices=MODELS, default=None)
+        command.add_argument("--language", default=None, help="Language code (default es), or auto")
+        command.add_argument("--offline", action=argparse.BooleanOptionalAction, default=None)
+        command.add_argument("--models-dir", type=Path, default=None)
+        command.add_argument("--recordings-dir", type=Path, default=None)
+        command.add_argument("--transcripts-dir", type=Path, default=None)
+    return root
+
+
+def settings_for(args: argparse.Namespace) -> Settings:
+    path = args.config
+    if path is None and Path("classscribe.toml").is_file():
+        path = Path("classscribe.toml")
+    return load_settings(path, vars(args))
+
+
+def list_devices() -> None:
+    backend = WasapiBackend()
+    try:
+        devices = backend.devices()
+        for source, heading in (
+            ("system", "SYSTEM OUTPUT / LOOPBACK DEVICES"),
+            ("microphone", "MICROPHONES"),
+        ):
+            print(heading)
+            for device in devices:
+                if device.source == source:
+                    default = " (default)" if device.is_default else ""
+                    print(
+                        f"[{device.id}] {device.name}{default} | "
+                        f"{device.sample_rate} Hz, {device.channels} ch"
+                    )
+    finally:
+        backend.close()
+
+
+def run_record(args: argparse.Namespace, settings: Settings) -> None:
+    backend = WasapiBackend()
+    manager = SessionManager(settings.recordings_dir)
+    try:
+        available = backend.devices()
+        devices = [select_device(available, "system", args.output_device)]
+        microphone_enabled = settings.microphone
+        if args.microphone_device is not None and args.microphone is None:
+            microphone_enabled = True
+        if args.microphone_device is not None and args.microphone is False:
+            raise ValueError("--microphone-device cannot be combined with --no-microphone")
+        if microphone_enabled:
+            devices.append(select_device(available, "microphone", args.microphone_device))
+        directory, session = manager.create(args.title, args.course)
+        print(f"ClassScribe\n\nCourse: {session.course}\nTitle: {session.title}")
+        print(f"System audio: {devices[0].name}")
+        print(f"Microphone: {devices[1].name if len(devices) > 1 else 'disabled'}")
+        print(f"Session: {session.session_id}\nDirectory: {directory}", flush=True)
+        announced = False
+
+        def progress(elapsed: float) -> None:
+            nonlocal announced
+            if not announced:
+                print("Recording started. Press Ctrl+C to stop.", flush=True)
+                announced = True
+            if sys.stdout.isatty():
+                print(f"\rRecording: {timestamp(elapsed)}", end="", flush=True)
+
+        record_session(
+            manager, directory, session, backend, devices, progress=progress, duration=args.duration
+        )
+    finally:
+        backend.close()
+    print(f"\nRecording saved: {directory}")
+    if args.transcribe:
+        # Even importing this module is deferred until all capture resources close.
+        from classscribe.transcription.service import transcribe_session
+
+        result = transcribe_session(manager, directory, session, settings)
+        print(f"Transcript: {result}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parser().parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    logging.getLogger("faster_whisper").setLevel(logging.WARNING)
+    try:
+        settings = settings_for(args)
+        if args.command == "devices":
+            list_devices()
+        elif args.command == "record":
+            run_record(args, settings)
+        elif args.command == "transcribe":
+            from classscribe.transcription.service import transcribe_session
+
+            manager = SessionManager(settings.recordings_dir)
+            directory, session = manager.find(args.session_id)
+            result = transcribe_session(manager, directory, session, settings)
+            print(f"Transcript: {result}")
+        elif args.command == "doctor":
+            from classscribe.doctor import diagnose
+
+            report, ok = diagnose(settings, inference=args.device is not None)
+            if args.json:
+                print(json.dumps(report, indent=2, ensure_ascii=False))
+            else:
+                for key, value in report.items():
+                    print(f"{key}: {value}")
+                if args.device is None:
+                    print("Actual inference test: classscribe doctor --device cuda --model tiny")
+            return 0 if ok else 1
+        return 0
+    except KeyboardInterrupt:
+        print("\nCancelled. Original audio and partial work are preserved.", file=sys.stderr)
+        return 130
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+
+def entrypoint() -> None:
+    raise SystemExit(main())

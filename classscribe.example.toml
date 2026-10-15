@@ -1,0 +1,9 @@
+# Copy to classscribe.toml (ignored by Git). Relative paths use the current directory.
+device = "auto"
+model = "small"
+language = "es"
+microphone = true
+offline = false
+recordings_dir = "recordings"
+transcripts_dir = "transcripts"
+models_dir = "models"

@@ -1,0 +1,163 @@
+"""Unique runs, durable partial segments and transactional final publication."""
+
+import json
+import logging
+import os
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+from classscribe.config import Settings
+from classscribe.sessions.manager import SessionManager, now_iso
+from classscribe.sessions.models import Session, Status
+from classscribe.storage import atomic_json, exclusive_lock
+from classscribe.transcription.chunks import audio_chunks
+from classscribe.transcription.engine import Engine, load_engine
+from classscribe.transcription.transcript import Segment, markdown, merge_segments
+
+logger = logging.getLogger(__name__)
+
+
+def resolve_audio(directory: Path, filename: str) -> Path:
+    path = (directory / filename).resolve()
+    if path.parent != directory.resolve() or path.suffix.lower() != ".wav":
+        raise ValueError("Session audio must be a WAV file inside its session directory")
+    return path
+
+
+def transcribe_session(
+    manager: SessionManager,
+    directory: Path,
+    session: Session,
+    settings: Settings,
+    *,
+    engine_factory: Callable[[Settings], Engine] = load_engine,
+) -> Path:
+    with exclusive_lock(directory):
+        # Re-read under lock so an old in-memory status cannot start concurrent work.
+        session = manager.load(directory)
+        if not session.recording_finalized or session.status not in {
+            Status.RECORDED,
+            Status.COMPLETED,
+            Status.FAILED,
+        }:
+            raise ValueError("Transcription requires a successfully finalized recording")
+        run_id = f"{settings.model}-{uuid4().hex}"
+        run = settings.transcripts_dir / session.session_id / run_id
+        run.mkdir(parents=True, exist_ok=False)
+        report: dict[str, Any] = {
+            "schema_version": 1,
+            "session_id": session.session_id,
+            "run_id": run_id,
+            "status": "transcribing",
+            "started_at": now_iso(),
+            "model": settings.model,
+            "requested_device": settings.device,
+            "language": settings.language,
+            "segments_preserved": 0,
+            "stage": "loading_model",
+        }
+        session.transition(Status.TRANSCRIBING)
+        session.error = None
+        session.transcription_runs.append(run_id)
+        try:
+            manager.save(directory, session)
+            atomic_json(run / "run.json", report)
+            engine = engine_factory(settings)
+            report.update(device=engine.device, compute_type=engine.compute_type)
+            atomic_json(run / "run.json", report)
+            segments: list[Segment] = []
+            with (run / "segments.partial.jsonl").open("x", encoding="utf-8") as partial:
+                for source, track in session.tracks.items():
+                    offset = track["start_offset_seconds"]
+                    if not track["frames"]:
+                        continue
+                    if offset is None:
+                        raise ValueError("Nonempty track is missing its timeline offset")
+                    for part in track["parts"]:
+                        part_offset = part["start_frame"] / track["sample_rate"]
+                        path = resolve_audio(directory, part["file"])
+                        report.update(
+                            stage="decoding_audio", source=source, audio_file=part["file"]
+                        )
+                        for chunk, chunk_start, chunk_duration in audio_chunks(path, run):
+                            report.update(stage="inference", chunk_start_seconds=chunk_start)
+                            atomic_json(run / "run.json", report)
+                            generated, language = engine.transcribe(chunk, settings.language)
+                            for raw in generated:
+                                if not raw.text.strip():
+                                    continue
+                                if not 0 <= raw.start <= raw.end <= chunk_duration + 0.1:
+                                    raise ValueError("Whisper returned an invalid chunk timestamp")
+                                segment = Segment(
+                                    source=source,
+                                    start=offset + part_offset + chunk_start + raw.start,
+                                    end=offset + part_offset + chunk_start + raw.end,
+                                    text=raw.text.strip(),
+                                    language=language,
+                                    audio_file=part["file"],
+                                    audio_start=chunk_start + raw.start,
+                                    audio_end=chunk_start + raw.end,
+                                )
+                                partial.write(
+                                    json.dumps(segment.to_dict(), ensure_ascii=False) + "\n"
+                                )
+                                partial.flush()
+                                os.fsync(partial.fileno())
+                                segments.append(segment)
+                                report["segments_preserved"] = len(segments)
+            transcript = {
+                "schema_version": 1,
+                "session_id": session.session_id,
+                "run_id": run_id,
+                "title": session.title,
+                "course": session.course,
+                "started_at": session.started_at,
+                "duration_seconds": session.duration_seconds,
+                "language": settings.language,
+                "detected_languages": sorted({segment.language for segment in segments}),
+                "model": settings.model,
+                "device": engine.device,
+                "compute_type": engine.compute_type,
+                "timeline": "seconds from common recording origin",
+                "segments": [segment.to_dict() for segment in merge_segments(segments)],
+            }
+            # A directory rename publishes the two artifacts together. Before this
+            # point only partial files exist; consumers use result/ as the commit marker.
+            report["stage"] = "publishing_artifacts"
+            staging = run / ".result.partial"
+            staging.mkdir()
+            atomic_json(staging / "transcript.json", transcript)
+            with (staging / "transcript.md").open("x", encoding="utf-8") as handle:
+                handle.write(markdown(transcript))
+                handle.flush()
+                os.fsync(handle.fileno())
+            staging.rename(run / "result")
+        except BaseException as exc:
+            report.update(status="failed", ended_at=now_iso(), error_type=type(exc).__name__)
+            report["recovery"] = (
+                "Original audio is unchanged. Review stage/source/chunk and the partial journal. "
+                "For CUDA failures run doctor --device cuda; "
+                "retry with small/tiny or explicit CPU. "
+                "For storage failures check free disk space. A retry creates a new run."
+            )
+            # Do not copy third-party exception bodies into logs/reports: they could
+            # contain transcript fragments. The CLI receives our actionable errors.
+            try:
+                atomic_json(run / "run.json", report)
+            except OSError:
+                logger.error("Could not persist failed run metadata; check free disk space")
+            session.transition(Status.FAILED)
+            session.error = f"Transcription failed ({type(exc).__name__}); see run {run_id}"
+            try:
+                manager.save(directory, session)
+            except OSError:
+                logger.error("Could not persist failed session status; partial files remain")
+            logger.error("Transcription failed; partial segments preserved in %s", run)
+            raise
+        report.update(status="completed", stage="completed", ended_at=now_iso())
+        atomic_json(run / "run.json", report)
+        session.transition(Status.COMPLETED)
+        manager.save(directory, session)
+        return run / "result"
