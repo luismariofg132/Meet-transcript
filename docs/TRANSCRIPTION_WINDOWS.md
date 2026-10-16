@@ -48,9 +48,34 @@ midpoint    = (audio_start + audio_end) / 2
 
 The complete segment is accepted only if `midpoint` belongs to that window's ownership
 interval. Ownership uses original-part coordinates; session offsets are never compared
-against part-relative ownership bounds. Text and timestamps are not split or clipped.
+against part-relative ownership bounds. Text is never split, and valid timestamps are
+not clipped to the ownership boundary.
 A 291–295-second segment has midpoint 293 and belongs to the second window. A midpoint
 exactly at 292.5 also belongs to the second window.
+
+Before ownership is evaluated, model estimates are bounded to the **actual audio**
+in the decoded window. Whisper/VAD can estimate a final endpoint beyond the WAV's
+duration (for example, 296.50–301.86 in a 300-second window). When that tail extends
+by at most 30 seconds (one Whisper decoding window), its end is clipped to the real
+duration. Segments starting at or after the audio end contain no real audio and are
+dropped. This also applies to the last window: real tail speech is retained with an
+endpoint at EOF, not discarded because its estimated midpoint lies past EOF.
+
+Negative, reversed, non-finite timestamps and overruns exceeding 30 seconds still
+fail explicitly. This is a bounded tail policy, not arbitrary timestamp repair or
+a guarantee of recognition accuracy. `run.json.timestamp_adjustments` records clipped
+ends and padding-only drops, including estimates subsequently filtered by ownership.
+On invalid estimates, `run.json.invalid_timestamp` includes the raw numeric coordinates
+and window duration, without recognized text. Existing partial recovery is preserved.
+
+Validation of the boundary fix: 210 offline tests passed, including 19 new boundary
+cases covering recordings and YouTube imports, overlap ownership, EOF, padding-only
+estimates and invalid-value recovery. Ruff lint/format and diff whitespace checks passed.
+A separate real CUDA/small validation processed an isolated copy of a 6060.083125-second
+imported WAV through the complete service: 932 segments published as JSON/Markdown,
+three clipped endpoint estimates, zero padding-only drops, 457.1 seconds elapsed.
+The original session and failed run were not changed. This verifies completion and
+bounded timestamps, not manual transcription accuracy.
 
 There is no text-based or global duplicate removal. Identical utterances at different
 times survive, including adjacent intentional repetitions. System and microphone

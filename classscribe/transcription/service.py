@@ -16,6 +16,7 @@ from classscribe.storage import atomic_json, exclusive_lock
 from classscribe.transcription.chunks import audio_chunks, chunking_metadata
 from classscribe.transcription.engine import Engine, load_engine
 from classscribe.transcription.progress import TranscriptionProgress
+from classscribe.transcription.timestamps import audio_interval
 from classscribe.transcription.transcript import Segment, markdown, merge_segments
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ def transcribe_session(
             "segments_preserved": 0,
             "stage": "loading_model",
             "chunking": chunking_metadata(),
+            "timestamp_adjustments": {"clipped_ends": 0, "padding_segments_dropped": 0},
         }
         session.transition(Status.TRANSCRIBING)
         session.error = None
@@ -134,12 +136,28 @@ def transcribe_session(
                                 for raw in generated:
                                     if not raw.text.strip():
                                         continue
-                                    if not 0 <= raw.start <= raw.end <= window.duration + 0.1:
-                                        raise ValueError(
-                                            "Whisper returned an invalid chunk timestamp"
+                                    try:
+                                        interval = audio_interval(
+                                            raw.start, raw.end, window.duration
                                         )
-                                    audio_start = window.start + raw.start
-                                    audio_end = window.start + raw.end
+                                    except ValueError:
+                                        # Numeric context only: never persist recognized text
+                                        # in error diagnostics. repr also handles NaN/inf.
+                                        report["invalid_timestamp"] = {
+                                            "start": repr(raw.start),
+                                            "end": repr(raw.end),
+                                            "window_duration": window.duration,
+                                        }
+                                        raise
+                                    if interval is None:
+                                        report["timestamp_adjustments"][
+                                            "padding_segments_dropped"
+                                        ] += 1
+                                        continue
+                                    if interval[1] != raw.end:
+                                        report["timestamp_adjustments"]["clipped_ends"] += 1
+                                    audio_start = window.start + interval[0]
+                                    audio_end = window.start + interval[1]
                                     segment = Segment(
                                         source=segment_source,
                                         start=offset + part_offset + audio_start,
