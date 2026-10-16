@@ -2,9 +2,11 @@
 
 import os
 import queue
+import sys
 import threading
 import time
 import wave
+from array import array
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -42,6 +44,8 @@ class TrackWriter:
         self.raw: BinaryIO | None = None
         self.wav: wave.Wave_write | None = None
         self.last_sync = time.perf_counter()
+        self.level = 0.0
+        self.level_at = 0.0
         try:
             self._open_part()
         except Exception:
@@ -134,6 +138,17 @@ class TrackWriter:
         elif delta < -0.1:
             raise RuntimeError("Audio clock moved backwards by over 100 ms; inspect track timing")
         self._write(chunk.data)
+        now = time.perf_counter()
+        if now - self.level_at >= 0.1:
+            samples = array("h", chunk.data)
+            if sys.byteorder != "little":
+                samples.byteswap()
+            self.level = max((abs(sample) for sample in samples), default=0) / 32768
+            self.level_at = now
+
+    def audio_level(self) -> float:
+        # A scalar snapshot only; stale loopback callbacks must not leave a stuck meter.
+        return self.level if time.perf_counter() - self.level_at < 0.3 else 0.0
 
     def _run(self) -> None:
         try:

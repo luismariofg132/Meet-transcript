@@ -4,6 +4,7 @@ import logging
 import time
 from collections.abc import Callable
 from pathlib import Path
+from threading import Event
 
 from classscribe.audio.devices import Device
 from classscribe.audio.interfaces import AudioBackend, CaptureStream
@@ -30,6 +31,8 @@ def record_session(
     wait: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.perf_counter,
     duration: float | None = None,
+    stop_event: Event | None = None,
+    levels: Callable[[float, float], None] | None = None,
 ) -> Session:
     if session.status != Status.CREATED:
         raise ValueError("Only a new session can be recorded")
@@ -76,7 +79,14 @@ def record_session(
                     checkpoint = elapsed
                 if duration is not None and elapsed >= duration:
                     break
-                wait(0.2)
+                if levels is not None:
+                    current = {w.device.source: w.audio_level() for w in writers}
+                    levels(current.get("system", 0.0), current.get("microphone", 0.0))
+                if stop_event is not None:
+                    if stop_event.wait(0.1):
+                        break
+                else:
+                    wait(0.2)
         except KeyboardInterrupt as exc:
             if not started:
                 error = exc

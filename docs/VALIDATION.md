@@ -114,3 +114,31 @@ recordings, transcripts, weights, local config, virtual environments, dependency
 logs and binaries. No such artifact was found among the files prepared for review.
 Changes remain local and uncommitted; nothing was pushed to GitHub. The reference
 `Youtube_Transcrip` repository was read through the GitHub connector and was not modified.
+
+## Desktop GUI validation (2026-10-15, America/Bogota)
+
+The desktop change was validated locally on Windows with Python 3.12.14 and PySide6
+6.12.0. The complete suite passed: **155 tests**, comprising the existing **130**
+regression tests, **13** new headless application/core tests and **12** optional Qt tests.
+Ruff lint and `ruff format --check .` passed (54 Python files). `git diff --check` passed.
+
+Qt tests instantiated all pages with populated device/session/run/transcript models,
+opened combo popups, exercised the active-recording close dialog, and rendered the
+three themes at 1000×650, 1366×768 and 1920×1080. No QML syntax/runtime warnings occurred
+in that validation. Windows offscreen's missing-font-database warning is handled by
+loading existing OS fonts in tests; no fonts are distributed. Qt's qmlformat also
+successfully formatted all 20 QML files.
+
+Built and inspected the Python wheel: all 20 QML files, the singleton `qmldir`, CLI
+entry point and GUI entry point are present. Local recordings, caches and weights
+are excluded. Reinstalled the editable package and verified `classscribe-gui.exe`
+was generated and CLI help still exposes devices/doctor/record/transcribe.
+The `python -m classscribe.gui` entry point also started and closed successfully offscreen
+using a timer-driven test harness; exit code 0.
+
+Actual WASAPI discovery through the GUI service found **two system outputs and one
+microphone**. Captured an actual Home screenshot at 1366×768 for the README. This opened
+no recording streams and ran no model, inference or download. Lifecycle/inference
+tests use mocks and synthetic PCM only. Real audio/CUDA validation, multi-hour capture,
+Linux execution, remote CI and Windows executable packaging were not performed in
+this desktop change. The added separate GUI CI job has not been claimed as remotely run.

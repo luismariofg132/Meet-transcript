@@ -6,11 +6,14 @@ import sys
 from pathlib import Path
 
 from classscribe import __version__
-from classscribe.audio.devices import select_device
+from classscribe.application.recording import RecordingService
+from classscribe.application.transcription import transcribe
+from classscribe.audio.devices import Device
 from classscribe.audio.recorder import record_session
 from classscribe.audio.wasapi import WasapiBackend
 from classscribe.config import DEVICES, MODELS, Settings, load_settings
 from classscribe.sessions.manager import SessionManager
+from classscribe.sessions.models import Session
 from classscribe.storage import timestamp
 
 
@@ -68,65 +71,54 @@ def settings_for(args: argparse.Namespace) -> Settings:
 
 
 def list_devices() -> None:
-    backend = WasapiBackend()
-    try:
-        devices = backend.devices()
-        for source, heading in (
-            ("system", "SYSTEM OUTPUT / LOOPBACK DEVICES"),
-            ("microphone", "MICROPHONES"),
-        ):
-            print(heading)
-            for device in devices:
-                if device.source == source:
-                    default = " (default)" if device.is_default else ""
-                    print(
-                        f"[{device.id}] {device.name}{default} | "
-                        f"{device.sample_rate} Hz, {device.channels} ch"
-                    )
-    finally:
-        backend.close()
+    devices = RecordingService(backend_factory=WasapiBackend).devices()
+    for source, heading in (
+        ("system", "SYSTEM OUTPUT / LOOPBACK DEVICES"),
+        ("microphone", "MICROPHONES"),
+    ):
+        print(heading)
+        for device in devices:
+            if device.source == source:
+                default = " (default)" if device.is_default else ""
+                print(
+                    f"[{device.id}] {device.name}{default} | "
+                    f"{device.sample_rate} Hz, {device.channels} ch"
+                )
 
 
 def run_record(args: argparse.Namespace, settings: Settings) -> None:
-    backend = WasapiBackend()
-    manager = SessionManager(settings.recordings_dir)
-    try:
-        available = backend.devices()
-        devices = [select_device(available, "system", args.output_device)]
-        microphone_enabled = settings.microphone
-        if args.microphone_device is not None and args.microphone is None:
-            microphone_enabled = True
-        if args.microphone_device is not None and args.microphone is False:
-            raise ValueError("--microphone-device cannot be combined with --no-microphone")
-        if microphone_enabled:
-            devices.append(select_device(available, "microphone", args.microphone_device))
-        directory, session = manager.create(args.title, args.course)
+    def prepared(directory: Path, session: Session, devices: list[Device]) -> None:
         print(f"ClassScribe\n\nCourse: {session.course}\nTitle: {session.title}")
         print(f"System audio: {devices[0].name}")
         print(f"Microphone: {devices[1].name if len(devices) > 1 else 'disabled'}")
         print(f"Session: {session.session_id}\nDirectory: {directory}", flush=True)
-        announced = False
 
-        def progress(elapsed: float) -> None:
-            nonlocal announced
-            if not announced:
-                print("Recording started. Press Ctrl+C to stop.", flush=True)
-                announced = True
-            if sys.stdout.isatty():
-                print(f"\rRecording: {timestamp(elapsed)}", end="", flush=True)
+    announced = False
 
-        record_session(
-            manager, directory, session, backend, devices, progress=progress, duration=args.duration
-        )
-    finally:
-        backend.close()
-    print(f"\nRecording saved: {directory}")
+    def progress(elapsed: float) -> None:
+        nonlocal announced
+        if not announced:
+            print("Recording started. Press Ctrl+C to stop.", flush=True)
+            announced = True
+        if sys.stdout.isatty():
+            print(f"\rRecording: {timestamp(elapsed)}", end="", flush=True)
+
+    service = RecordingService(backend_factory=WasapiBackend, recorder=record_session)
+    result = service.record(
+        settings,
+        args.title,
+        args.course,
+        output_device=args.output_device,
+        microphone_device=args.microphone_device,
+        microphone=args.microphone,
+        prepared=prepared,
+        progress=progress,
+        duration=args.duration,
+    )
+    print(f"\nRecording saved: {result.directory}")
     if args.transcribe:
-        # Even importing this module is deferred until all capture resources close.
-        from classscribe.transcription.service import transcribe_session
-
-        result = transcribe_session(manager, directory, session, settings)
-        print(f"Transcript: {result}")
+        output = transcribe(settings, result.directory, result.session)
+        print(f"Transcript: {output}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -140,11 +132,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "record":
             run_record(args, settings)
         elif args.command == "transcribe":
-            from classscribe.transcription.service import transcribe_session
-
             manager = SessionManager(settings.recordings_dir)
             directory, session = manager.find(args.session_id)
-            result = transcribe_session(manager, directory, session, settings)
+            result = transcribe(settings, directory, session)
             print(f"Transcript: {result}")
         elif args.command == "doctor":
             from classscribe.doctor import diagnose

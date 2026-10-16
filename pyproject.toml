@@ -11,6 +11,7 @@ requires-python = ">=3.12"
 dependencies = []
 
 [project.optional-dependencies]
+gui = ["PySide6>=6.8,<7"]
 audio = ["PyAudioWPatch>=0.2.12.7,<0.3; sys_platform == 'win32'"]
 transcription = ["faster-whisper>=1.2,<2", "ctranslate2>=4.6,<5", "numpy>=1.26,<3"]
 cuda = ["nvidia-cublas-cu12>=12.4,<13", "nvidia-cudnn-cu12>=9,<10; sys_platform == 'linux'"]
@@ -18,6 +19,9 @@ dev = ["pytest>=8,<10", "ruff>=0.11,<1"]
 
 [project.scripts]
 classscribe = "classscribe.cli.commands:entrypoint"
+
+[project.gui-scripts]
+classscribe-gui = "classscribe.gui.app:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["classscribe"]

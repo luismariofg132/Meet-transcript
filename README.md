@@ -6,8 +6,56 @@ or another desktop application. An optional microphone is recorded as a separate
 It has no dependency on the meeting platform or its APIs.
 
 This is an independent Python 3.12 project. It does not extend the YouTube application.
-The initial release is a CLI MVP: no GUI, cloud service, live transcription, remote speaker
-diarization, or AI study features.
+Use the native Qt Quick desktop interface or the fully supported CLI. There is no cloud
+service, live transcription, remote speaker diarization, or AI study feature.
+
+## Desktop application
+
+```powershell
+pip install -e ".[audio,transcription,cuda,gui]"
+classscribe-gui
+# Alternative:
+python -m classscribe.gui
+```
+
+The optional `gui` extra adds PySide6; headless installations do not require Qt.
+CUDA runtime setup on Windows still follows [the existing guide](docs/TRANSCRIPTION_WINDOWS.md).
+For CPU-only use, omit `cuda` and select CPU in the application.
+
+On **Home**, enter a course and title, check the readable system/microphone selectors,
+and click **Start recording**. Disable the microphone if you only need class audio.
+Refresh devices after plugging in a headset. The default selection follows the current
+Windows default; recording uses the devices selected at start.
+
+The recording screen displays elapsed time and separate audio meters. **Stop recording**
+finishes the audio files before offering transcription. Enable automatic transcription
+on Home to start Whisper after that finalization. Closing during recording asks whether
+to stop and save first; it never kills the recording worker.
+
+**Classes** lists sessions newest first. Open a class to inspect all transcription runs
+or transcribe again with another model/device. Each run is preserved. The built-in viewer
+reads structured JSON, distinguishing **CLASS** (system audio) and **ME** (microphone).
+You can also open the Markdown transcript or its folder in your default applications.
+
+**Settings** provides dark/light/system themes, devices, model, processing device, language,
+offline mode and storage directories. Click **Save settings** to persist your choices.
+Diagnostics is manual; model loading/inference requires explicitly enabling its checkbox.
+There is no inference cancellation: closing can wait for completion.
+
+Desktop storage defaults to `Documents/ClassScribe/{recordings,transcripts,models}`;
+preferences use Qt's per-user application configuration directory. CLI TOML settings
+remain independent. To see existing CLI sessions, point the GUI's storage settings at
+the same absolute directories. Changing storage settings does not move files.
+
+Actual offscreen screenshot of the implementation at 1366×768, with device discovery
+and no active recording:
+
+![ClassScribe Home](docs/images/gui-home.png)
+
+See [desktop architecture, validation and limitations](docs/GUI.md) and
+[Windows bundle instructions](docs/GUI_DEPLOYMENT.md).
+The [implementation report](docs/GUI_IMPLEMENTATION_REPORT.md) records changed files,
+tests actually run and remaining manual acceptance work.
 
 ## Workflow and architecture
 

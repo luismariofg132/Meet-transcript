@@ -30,3 +30,9 @@ classscribe.toml
 *.exe
 .coverage
 htmlcov/
+graphify-out/
+pysidedeploy.spec
+deployment/
+*.build/
+*.dist/
+*.onefile-build/

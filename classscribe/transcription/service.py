@@ -15,6 +15,7 @@ from classscribe.sessions.models import Session, Status
 from classscribe.storage import atomic_json, exclusive_lock
 from classscribe.transcription.chunks import audio_chunks, chunking_metadata
 from classscribe.transcription.engine import Engine, load_engine
+from classscribe.transcription.progress import TranscriptionProgress
 from classscribe.transcription.transcript import Segment, markdown, merge_segments
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ def transcribe_session(
     settings: Settings,
     *,
     engine_factory: Callable[[Settings], Engine] = load_engine,
+    progress: Callable[[TranscriptionProgress], None] | None = None,
 ) -> Path:
     with exclusive_lock(directory):
         # Re-read under lock so an old in-memory status cannot start concurrent work.
@@ -63,9 +65,26 @@ def transcribe_session(
         session.transition(Status.TRANSCRIBING)
         session.error = None
         session.transcription_runs.append(run_id)
+        total_seconds = sum(t["frames"] / t["sample_rate"] for t in session.tracks.values())
+        processed_seconds = 0.0
+
+        def notify(stage: str, source: str = "", filename: str = "") -> None:
+            if progress is not None:
+                progress(
+                    TranscriptionProgress(
+                        stage,
+                        processed_seconds,
+                        total_seconds,
+                        source,
+                        filename,
+                        report.get("device", ""),
+                    )
+                )
+
         try:
             manager.save(directory, session)
             atomic_json(run / "run.json", report)
+            notify("loading_model")
             engine = engine_factory(settings)
             report.update(device=engine.device, compute_type=engine.compute_type)
             atomic_json(run / "run.json", report)
@@ -83,6 +102,7 @@ def transcribe_session(
                         report.update(
                             stage="decoding_audio", source=source, audio_file=part["file"]
                         )
+                        notify("preparing_audio", source, part["file"])
                         # Explicitly close the generator even on inference failure or
                         # cancellation, so temporary WAVs never wait for GC cleanup.
                         with closing(audio_chunks(path, run)) as windows:
@@ -95,6 +115,7 @@ def transcribe_session(
                                     keep_end_seconds=window.keep_end,
                                 )
                                 atomic_json(run / "run.json", report)
+                                notify("transcribing", source, part["file"])
                                 generated, language = engine.transcribe(
                                     window.path, settings.language
                                 )
@@ -128,6 +149,9 @@ def transcribe_session(
                                     os.fsync(partial.fileno())
                                     segments.append(segment)
                                     report["segments_preserved"] = len(segments)
+                                processed_seconds += window.keep_end - window.keep_start
+                                notify("transcribing", source, part["file"])
+            notify("merging")
             transcript = {
                 "schema_version": 1,
                 "session_id": session.session_id,
@@ -148,6 +172,7 @@ def transcribe_session(
             # A directory rename publishes the two artifacts together. Before this
             # point only partial files exist; consumers use result/ as the commit marker.
             report["stage"] = "publishing_artifacts"
+            notify("publishing")
             staging = run / ".result.partial"
             staging.mkdir()
             atomic_json(staging / "transcript.json", transcript)
@@ -182,4 +207,5 @@ def transcribe_session(
         atomic_json(run / "run.json", report)
         session.transition(Status.COMPLETED)
         manager.save(directory, session)
+        notify("completed")
         return run / "result"
