@@ -40,11 +40,16 @@ def transcribe_session(
     with exclusive_lock(directory):
         # Re-read under lock so an old in-memory status cannot start concurrent work.
         session = manager.load(directory)
-        if not session.recording_finalized or session.status not in {
-            Status.RECORDED,
-            Status.COMPLETED,
-            Status.FAILED,
-        }:
+        if (
+            not session.recording_finalized
+            or not session.tracks
+            or session.status
+            not in {
+                Status.RECORDED,
+                Status.COMPLETED,
+                Status.FAILED,
+            }
+        ):
             raise ValueError("Transcription requires a successfully finalized recording")
         run_id = f"{settings.model}-{uuid4().hex}"
         run = settings.transcripts_dir / session.session_id / run_id
@@ -91,6 +96,11 @@ def transcribe_session(
             segments: list[Segment] = []
             with (run / "segments.partial.jsonl").open("x", encoding="utf-8") as partial:
                 for source, track in session.tracks.items():
+                    segment_source = (
+                        "media"
+                        if session.source_kind == "youtube" and source == "system"
+                        else source
+                    )
                     offset = track["start_offset_seconds"]
                     if not track["frames"]:
                         continue
@@ -100,9 +110,11 @@ def transcribe_session(
                         part_offset = part["start_frame"] / track["sample_rate"]
                         path = resolve_audio(directory, part["file"])
                         report.update(
-                            stage="decoding_audio", source=source, audio_file=part["file"]
+                            stage="decoding_audio",
+                            source=segment_source,
+                            audio_file=part["file"],
                         )
-                        notify("preparing_audio", source, part["file"])
+                        notify("preparing_audio", segment_source, part["file"])
                         # Explicitly close the generator even on inference failure or
                         # cancellation, so temporary WAVs never wait for GC cleanup.
                         with closing(audio_chunks(path, run)) as windows:
@@ -115,7 +127,7 @@ def transcribe_session(
                                     keep_end_seconds=window.keep_end,
                                 )
                                 atomic_json(run / "run.json", report)
-                                notify("transcribing", source, part["file"])
+                                notify("transcribing", segment_source, part["file"])
                                 generated, language = engine.transcribe(
                                     window.path, settings.language
                                 )
@@ -129,7 +141,7 @@ def transcribe_session(
                                     audio_start = window.start + raw.start
                                     audio_end = window.start + raw.end
                                     segment = Segment(
-                                        source=source,
+                                        source=segment_source,
                                         start=offset + part_offset + audio_start,
                                         end=offset + part_offset + audio_end,
                                         text=raw.text.strip(),
@@ -150,7 +162,7 @@ def transcribe_session(
                                     segments.append(segment)
                                     report["segments_preserved"] = len(segments)
                                 processed_seconds += window.keep_end - window.keep_start
-                                notify("transcribing", source, part["file"])
+                                notify("transcribing", segment_source, part["file"])
             notify("merging")
             transcript = {
                 "schema_version": 1,

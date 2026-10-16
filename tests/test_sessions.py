@@ -51,6 +51,40 @@ def test_transitions(tmp_path):
         assert session.status == state
 
 
+def test_importing_transitions_and_legacy_session_compatibility(tmp_path):
+    manager = SessionManager(tmp_path)
+    _, imported = manager.create("YouTube Lecture")
+    with pytest.raises(ValueError):
+        imported.transition(Status.RECORDED)
+    imported.transition(Status.IMPORTING)
+    assert imported.status == Status.IMPORTING
+    with pytest.raises(ValueError):
+        imported.transition(Status.TRANSCRIBING)
+    imported.transition(Status.RECORDED)
+    assert imported.status == Status.RECORDED
+
+    _, failed_import = manager.create("Failed YouTube")
+    failed_import.transition(Status.IMPORTING)
+    failed_import.transition(Status.FAILED)
+    assert failed_import.status == Status.FAILED
+
+    # Legacy schema v1 session JSON without source_kind/youtube/importing fields still loads.
+    legacy_payload = {
+        "session_id": "0123456789abcdef0123456789abcdef",
+        "title": "Legacy Class",
+        "course": "History",
+        "created_at": "2026-10-15T12:00:00+00:00",
+        "platform": "Windows-11",
+        "schema_version": 1,
+        "status": "recorded",
+        "recording_finalized": True,
+    }
+    legacy_session = Session.from_dict(legacy_payload)
+    assert legacy_session.status == Status.RECORDED
+    assert legacy_session.source_kind == "recording"
+    assert legacy_session.youtube is None
+
+
 def test_schema_version_rejected():
     with pytest.raises(ValueError, match="schema"):
         Session.from_dict({"schema_version": 99})

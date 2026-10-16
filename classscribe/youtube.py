@@ -353,6 +353,36 @@ def _write_av_frame(writer: _PcmPartWriter, frame: Any) -> None:
         writer.write(raw)
 
 
+def _matching_metadata(
+    video_id: str, canonical: str, metadata: YouTubeMetadata | None
+) -> YouTubeMetadata | None:
+    if metadata is None or not metadata.title.strip():
+        return None
+    try:
+        meta_id, meta_canonical = parse_youtube_url(metadata.url)
+    except ValueError:
+        return None
+    if meta_id != video_id or meta_canonical != canonical:
+        return None
+    if metadata.video_id and metadata.video_id != video_id:
+        return None
+    return YouTubeMetadata(
+        video_id=video_id,
+        url=canonical,
+        title=metadata.title.strip(),
+        channel=metadata.channel.strip(),
+        duration_seconds=(
+            float(metadata.duration_seconds)
+            if isinstance(metadata.duration_seconds, (int, float))
+            and not isinstance(metadata.duration_seconds, bool)
+            and math.isfinite(metadata.duration_seconds)
+            and metadata.duration_seconds >= 0
+            else 0.0
+        ),
+        upload_date=metadata.upload_date.strip(),
+    )
+
+
 def import_youtube_session(
     manager: SessionManager,
     url: str,
@@ -373,8 +403,8 @@ def import_youtube_session(
             progress(YouTubeImportProgress(stage, downloaded, total, label))
 
     notify("inspecting", label=title.strip())
-    if metadata is None or metadata.url != canonical:
-        metadata = yt.inspect(canonical)
+    validated = _matching_metadata(video_id, canonical, metadata)
+    metadata = validated if validated is not None else yt.inspect(canonical)
     resolved_title = title.strip() or metadata.title.strip() or f"YouTube {video_id}"
     resolved_course = course.strip() or metadata.channel.strip()
     directory, session = manager.create(resolved_title, resolved_course)
@@ -395,7 +425,7 @@ def import_youtube_session(
             }
             session.microphone_device = None
             session.microphone_audio_file = None
-            session.transition(Status.RECORDING)
+            session.transition(Status.IMPORTING)
             manager.save(directory, session)
             if prepared is not None:
                 prepared(directory, session, metadata)
@@ -431,6 +461,10 @@ def import_youtube_session(
         except BaseException as exc:
             error = exc
         finally:
+            if error is not None:
+                for temp_file in directory.glob("source-*"):
+                    if temp_file.is_file() and temp_file.name != "system.wav":
+                        temp_file.unlink(missing_ok=True)
             session.ended_at = now_iso()
             session.recording_finalized = error is None and "system" in session.tracks
             session.error = f"{type(error).__name__}: {error}" if error else None

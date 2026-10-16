@@ -12,6 +12,13 @@ from classscribe.storage import timestamp
 logger = logging.getLogger(__name__)
 
 
+SOURCE_LABELS = {
+    "system": "CLASS",
+    "microphone": "ME",
+    "media": "VIDEO",
+}
+
+
 class SessionLibrary:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -81,11 +88,16 @@ class SessionLibrary:
         data = json.loads((directory / "transcript.json").read_text(encoding="utf-8"))
         if data.get("schema_version") != 1:
             raise ValueError("Unsupported transcript schema")
-        return [
-            {
-                **segment,
-                "speaker": "CLASS" if segment["source"] == "system" else "ME",
-                "time": timestamp(segment["start"]),
-            }
-            for segment in data["segments"]
-        ]
+        rows = []
+        for segment in data["segments"]:
+            source = segment.get("source", "")
+            if source not in SOURCE_LABELS:
+                raise ValueError(f"Unknown transcript segment source: {source}")
+            rows.append(
+                {
+                    **segment,
+                    "speaker": SOURCE_LABELS[source],
+                    "time": timestamp(segment["start"]),
+                }
+            )
+        return rows

@@ -17,16 +17,17 @@ service, live transcription, remote speaker diarization, or AI study feature.
 ## Desktop application
 
 ```powershell
-pip install -e ".[audio,youtube,transcription,cuda,gui]"
+pip install -e ".[audio,transcription,cuda,gui,youtube]"
 classscribe-gui
 # Alternative:
 python -m classscribe.gui
 ```
 
 The optional `gui` extra adds PySide6; `youtube` adds `yt-dlp[default]` and PyAV for
-YouTube audio import. Headless installations do not require Qt.
-CUDA runtime setup on Windows still follows [the existing guide](docs/TRANSCRIPTION_WINDOWS.md).
-For CPU-only use, omit `cuda` and select CPU in the application.
+YouTube audio import; `cuda` adds the Python-packaged CUDA 12 cuBLAS and cuDNN 9 runtime
+libraries (`nvidia-cublas-cu12` and `nvidia-cudnn-cu12`) on both Windows and Linux.
+Headless installations do not require Qt. For CPU-only use, omit `cuda` and select CPU
+in the application.
 
 On **Home**, enter a course and title, check the readable system/microphone selectors,
 and click **Start recording**. Disable the microphone if you only need class audio.
@@ -35,7 +36,8 @@ Windows default; recording uses the devices selected at start.
 You can also paste a **YouTube video URL** on Home, click **Inspect video** to preview the
 title, channel, and duration (automatically filling blank title/course fields), and click
 **Import YouTube audio** to download audio into a local session (`system.wav`) and optionally
-auto-transcribe it.
+auto-transcribe it. Importing immediately after inspecting the same video reuses the
+inspected metadata without a duplicate lookup; changing the URL inspects the new video.
 
 The recording screen displays elapsed time and separate audio meters. **Stop recording**
 finishes the audio files before offering transcription. Enable automatic transcription
@@ -45,7 +47,8 @@ to stop and save first; it never kills the recording worker.
 **Classes** lists sessions newest first, showing whether each session came from a local
 recording or a YouTube import. Open a class to inspect all transcription runs
 or transcribe again with another model/device. Each run is preserved. The built-in viewer
-reads structured JSON, distinguishing **CLASS** (system/YouTube audio) and **ME** (microphone).
+reads structured JSON, distinguishing **CLASS** (system audio), **ME** (microphone), and
+**VIDEO** (imported YouTube media).
 You can also open the Markdown transcript or its folder in your default applications.
 
 **Settings** provides dark/light/system themes, devices, model, processing device, language,
@@ -139,29 +142,39 @@ python3.12 -m venv .venv
 
 `small` is the default model. Supported models: `tiny`, `base`, `small`, `medium`, `large-v3`.
 Each model downloads from Hugging Face on its first use and is cached under `models/`.
-Cached models are preferred without a network lookup. `--offline` prohibits downloads;
-a missing cache produces an error. Model weights are never part of Git.
+Cached models are preferred without a network lookup. `--offline` prohibits Whisper model
+downloads and requires an existing local model cache (missing caches fail with an actionable
+error). `--offline` applies only to transcription model acquisition; YouTube metadata
+inspection and audio download still require internet access because they contact YouTube.
+Model weights are never part of Git.
 
 ### NVIDIA CUDA installation
 
-Install a suitable NVIDIA driver. The `nvidia-smi` CUDA version is driver capability,
-not proof that inference runtime libraries are installed. Current upstream requirements
-are [CUDA 12 cuBLAS and cuDNN 9](https://github.com/SYSTRAN/faster-whisper#gpu).
+Working CUDA inference requires three distinct layers:
+
+1. **NVIDIA GPU driver**: Install a current NVIDIA driver. Note that the CUDA version shown
+   by `nvidia-smi` reflects driver capability, **not** proof that CUDA/cuDNN inference runtime
+   libraries are installed or loadable.
+2. **Python-installed CUDA 12 cuBLAS and cuDNN 9 runtime libraries**: Current upstream
+   `faster-whisper` / `ctranslate2` GPU builds require [CUDA 12 cuBLAS and cuDNN 9](https://github.com/SYSTRAN/faster-whisper#gpu).
+   Installing the `cuda` extra installs both `nvidia-cublas-cu12` (`>=12.4,<13`) and
+   `nvidia-cudnn-cu12` (`>=9,<10`) on Windows and Linux.
+3. **CUDA inference validation**: Verify actual model execution with `classscribe doctor --device cuda --model tiny`.
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -e ".[audio,transcription,cuda]"
+.\.venv\Scripts\python.exe -m pip install -e ".[audio,transcription,cuda,gui,youtube]"
 .\.venv\Scripts\python.exe -m classscribe doctor --device cuda --model tiny
 ```
 
-On Windows, the CUDA extra installs cuBLAS; CTranslate2 Windows wheels in the supported
-4.x series may bundle cuDNN. If your installed wheel does not, install cuDNN 9 from
-[NVIDIA](https://developer.nvidia.com/cudnn-downloads) and put its DLL directory on the
-process PATH. The app discovers DLLs inside installed `ctranslate2` and `nvidia` packages,
-retains `os.add_dll_directory` handles, and only adjusts its own process environment.
-It does not change system settings. Missing Microsoft runtime DLLs can require the
+On Windows, the application automatically discovers DLLs inside installed `ctranslate2` and
+`nvidia` (`cublas` and `cudnn`) Python packages, retains `os.add_dll_directory` handles for
+the process lifetime, and prepends those directories only to its own process `PATH`. It never
+modifies system-wide environment variables, and no external CUDA Toolkit installation is
+required for the supported pip-based path. Missing Microsoft runtime DLLs can require the
 [Visual C++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist).
 
-On Linux, the CUDA extra also installs cuDNN. Set the library path before starting Python:
+On Linux, the `cuda` extra also installs `nvidia-cublas-cu12` and `nvidia-cudnn-cu12`. Set
+the library path before starting Python:
 
 ```bash
 .venv/bin/python -m pip install -e '.[transcription,cuda]'
@@ -229,13 +242,19 @@ classscribe youtube "https://www.youtube.com/watch?v=VIDEO_ID"
 classscribe youtube "https://www.youtube.com/watch?v=VIDEO_ID" --title "Lecture 4" --course "Operating Systems" --transcribe --device cuda
 ```
 
-`youtube --inspect` prints structured JSON metadata (video ID, canonical URL, title, channel,
-and duration) without downloading audio. Without `--inspect`, ClassScribe downloads the best
-audio stream via `yt-dlp`, decodes it to mono 16 kHz PCM16 WAV (`system.wav`) inside a new
-session directory using PyAV, removes the temporary compressed download, and marks the session
-`recorded`. Passing `--transcribe` runs the standard ClassScribe transcription pipeline
-immediately after the local session audio is finalized. Re-transcribing a YouTube session
-later (`classscribe transcribe SESSION_ID`) reuses the local `system.wav` without re-downloading.
+`youtube --inspect` contacts YouTube over the network and prints structured JSON metadata
+(video ID, canonical URL, title, channel, and duration) without downloading audio. Without
+`--inspect`, ClassScribe transitions the new session through `created → importing → recorded`,
+downloads the best audio stream via `yt-dlp`, decodes and normalizes it to mono 16 kHz PCM16
+WAV (`system.wav`, rotating at 1 GiB if needed) inside the session directory using PyAV, and
+deletes the temporary compressed download (`source-*`) once the durable PCM WAV is finalized.
+If download or decoding fails, temporary `source-*` files are cleaned up and the session is
+marked `failed` with `recording_finalized = false` (which prevents transcription). Passing
+`--transcribe` runs the standard local ClassScribe transcription pipeline immediately after
+session audio is finalized. Re-transcribing a YouTube session later
+(`classscribe transcribe SESSION_ID`) reuses the local `system.wav` without re-downloading.
+`--offline` on `youtube --transcribe` allows the YouTube download over the network while
+requiring the Whisper model to be present in the local model cache.
 
 ### Transcription and combined workflow
 
@@ -296,17 +315,20 @@ Session directory and ID are never reused; metadata evolves atomically. Session 
 contains schema/application versions, title/course, UTC start/end times, duration,
 platform, device descriptions, audio filenames, sample rates/channel counts and per-track
 timing/part metadata. It omits hostnames, account names and machine serial numbers.
-States are `created → recording → recorded → transcribing → completed`. Errors become
-`failed`; completed or failed transcription runs can be re-transcribed when the original
-recording was successfully finalized. An exclusive session lock prevents simultaneous
-transcription operations.
+States are `created → recording → recorded → transcribing → completed` for live capture
+and `created → importing → recorded → transcribing → completed` for YouTube imports.
+Errors become `failed`; completed or failed transcription runs can be re-transcribed only
+when the session audio was successfully finalized (`recording_finalized = true`). An
+exclusive session lock prevents simultaneous transcription operations.
 
 Each final JSON segment has `source`, `start`, `end`, `text`, `language`, `audio_file`,
 `audio_start` and `audio_end`. `start/end` use the common session timeline; `audio_start/end`
-seek within the named WAV part. Segments from both tracks are sorted chronologically,
-preserving overlaps. `CLASE` in Markdown denotes **all system playback**, and `YO` denotes
-microphone audio. Neither is a claim about who was speaking. No remote speaker diarization
-is performed.
+seek within the named WAV part. Segments from all tracks are sorted chronologically,
+preserving overlaps. While imported YouTube audio is stored physically as `system.wav`
+(`tracks["system"]`) for pipeline compatibility, its transcript segments carry semantic
+`"source": "media"`. In Markdown, `CLASE` denotes system playback, `YO` denotes microphone
+audio, and `VIDEO` denotes imported media (`CLASS`, `ME`, and `VIDEO` in the desktop GUI).
+None of these labels claims speaker identity, and no speaker diarization is performed.
 
 ### Track synchronization and reliability
 
@@ -353,7 +375,8 @@ but before status metadata updates, the published result is usable; session stat
 All recordings and inference stay local. No OpenAI API, API keys, analytics, telemetry,
 automatic uploads, or cloud transcription are used. Hugging Face telemetry and implicit
 authentication are disabled in the inference process. Internet is needed only for package
-installation and uncached model downloads; `--offline` requires an existing model cache.
+installation, explicit YouTube metadata/audio import, and uncached model downloads;
+`--offline` requires an existing local model cache for transcription.
 Audio files, transcripts, caches, logs and local config are excluded from Git.
 
 You are responsible for ensuring you have permission to record and transcribe the class
@@ -372,7 +395,7 @@ Files are ordinary local files, without application-level encryption or automati
 | Device ID stopped working | Re-run `devices`; reconnects can change IDs |
 | Unsupported format / Bluetooth change | Use a stable endpoint; test a short recording first |
 | Capture stops with overflow | Reduce other disk/CPU load, use local storage, inspect preserved audio |
-| Missing CUDA DLL | Install CUDA 12 cuBLAS/cuDNN 9 and MSVC runtime; run the inference doctor |
+| Missing CUDA DLL | Install `.[cuda]` (CUDA 12 cuBLAS + cuDNN 9) and MSVC runtime; run the inference doctor |
 | CUDA out of memory | Close GPU-heavy apps after class, select `small`/`tiny`, or explicitly choose CPU |
 | Offline model missing | Download once without `--offline`, then rerun offline |
 | Interrupted transcription | Keep partial JSONL; rerun the session to create a new result |
@@ -387,7 +410,16 @@ speaker diarization, automatic meeting joining, or study-generation pipeline.
 ## Development and validation
 
 ```powershell
+# Lightweight core environment (no PyAV/yt-dlp or Qt required):
 python -m pip install -e ".[dev]"
+python -m pytest --ignore=tests/test_youtube.py --ignore=tests/test_gui.py
+
+# YouTube integration tests:
+python -m pip install -e ".[dev,youtube]"
+python -m pytest tests/test_youtube.py
+
+# Full suite including offscreen GUI:
+python -m pip install -e ".[dev,gui,youtube]"
 python -m pytest
 python -m ruff check .
 python -m ruff format --check .
@@ -397,8 +429,10 @@ Tests use temporary directories, synthetic PCM and fake hardware/inference inter
 Network sockets are disabled in the test process. They require no devices, GPU, model
 downloads, network, or meeting account. If your sandbox cannot write the default temporary
 directory, use `python -m pytest --basetemp .tools/pytest-temp` (this directory is disposable).
-The Windows/Linux GitHub Actions matrix runs tests, Ruff lint and format checks, installing
-only the development extra. CI does **not** validate actual WASAPI capture or CUDA hardware.
+GitHub Actions splits validation into three jobs: `core` (`windows-latest` and `ubuntu-latest`
+with `.[dev]`), `youtube` (`windows-latest` and `ubuntu-latest` with `.[dev,youtube]`), and
+`gui` (`windows-latest` offscreen with `.[dev,gui,youtube]`). CI does **not** validate actual
+WASAPI capture or CUDA hardware.
 
 Before relying on a full class, manually test a short recording on your endpoint, listen
 to both tracks, verify offsets and a playback-silence-resume interval, then run an explicit

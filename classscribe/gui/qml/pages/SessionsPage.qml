@@ -71,7 +71,9 @@ ColumnLayout {
                 }
                 AppText {
                     text: transcribed ? "Transcribed"
-                                      : (source_kind === "youtube" ? "YouTube audio" : "Recording")
+                                      : (source_kind === "youtube"
+                                         ? (status === "importing" ? "Importing" : "YouTube audio")
+                                         : "Recording")
                     color: transcribed ? Theme.success : Theme.muted
                 }
                 AppButton {

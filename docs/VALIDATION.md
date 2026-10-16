@@ -1,5 +1,19 @@
 # Implementation validation
 
+## YouTube corrective pass (2026-10-15)
+
+Corrected CI optional-dependency isolation (`av` lazy import in `tests/test_youtube.py` and split `core`/`youtube`/`gui` CI jobs), Windows `cuda` extra (`nvidia-cudnn-cu12>=9,<10` enabled on Windows alongside `nvidia-cublas-cu12>=12.4,<13`), `offline` semantics (`offline` only restricts Whisper model downloads, not YouTube metadata/audio network acquisition), semantic `media` / `VIDEO` transcript source mapping (`system` → `CLASS`/`CLASE`, `microphone` → `ME`/`YO`, `media` → `VIDEO` while preserving physical `system.wav`), `Status.IMPORTING` lifecycle (`created → importing → recorded` / `failed`), and GUI/application metadata reuse across canonical-equivalent URLs with stale-URL invalidation.
+
+| Command | Result |
+| --- | --- |
+| `.venv\Scripts\python.exe -m pytest --basetemp .tools\pytest-full` | **191 passed** (0 skipped with `.[dev,gui,youtube]` installed) |
+| `.venv\Scripts\python.exe -m pytest --ignore=tests/test_youtube.py --ignore=tests/test_gui.py --basetemp .tools\pytest-core` | **145 passed** (core CI selection) |
+| `.venv\Scripts\python.exe -m pytest tests/test_youtube.py --basetemp .tools\pytest-yt` | **33 passed**, 0 skipped (YouTube CI selection) |
+| `.venv\Scripts\python.exe -m pytest tests/test_gui.py tests/test_application_gui_core.py --basetemp .tools\pytest-gui` | **26 passed** (offscreen GUI CI selection) |
+| Core-only simulation (`av`, `yt_dlp`, `PySide6` blocked via `sys.meta_path`) | **177 passed, 2 skipped** (no collection error) |
+| `.venv\Scripts\python.exe -m ruff check .` | **All checks passed** |
+| `.venv\Scripts\python.exe -m ruff format --check .` | **57 files already formatted** |
+
 ## YouTube import source integration (2026-10-15)
 
 Added YouTube audio import (`classscribe/youtube.py`, `classscribe/application/youtube.py`, CLI `youtube` subcommand, and PySide6/QML GUI integration) reusing the existing ClassScribe session format (`system.wav`, `session.json`), overlapping-window transcription pipeline (`transcribe_session`), and `SessionLibrary`.

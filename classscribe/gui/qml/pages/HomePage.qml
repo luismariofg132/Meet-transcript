@@ -5,15 +5,23 @@ import "../components"
 
 ScrollView {
     id: page
+    property string autoTitle: ""
+    property string autoCourse: ""
     contentWidth: availableWidth
     clip: true
     Connections {
         target: appController
         function onYoutubeInspected() {
-            if (!title.text.trim() && appController.state.youtube.title)
+            if ((!title.text.trim() || title.text === page.autoTitle)
+                && appController.state.youtube.title) {
                 title.text = appController.state.youtube.title;
-            if (!course.text.trim() && appController.state.youtube.channel)
+                page.autoTitle = title.text;
+            }
+            if ((!course.text.trim() || course.text === page.autoCourse)
+                && appController.state.youtube.channel) {
                 course.text = appController.state.youtube.channel;
+                page.autoCourse = course.text;
+            }
         }
     }
     ColumnLayout {
@@ -151,6 +159,12 @@ ScrollView {
                         Layout.fillWidth: true
                         placeholderText: "https://www.youtube.com/watch?v=..."
                         Accessible.name: "YouTube video URL"
+                        onTextEdited: {
+                            if (title.text === page.autoTitle)
+                                title.text = "";
+                            if (course.text === page.autoCourse)
+                                course.text = "";
+                        }
                         onAccepted: appController.importYoutube(text, title.text, course.text)
                     }
                     AppButton {

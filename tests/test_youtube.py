@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import array
 import fractions
 import json
+import math
 import subprocess
 import sys
 import types
@@ -11,8 +13,6 @@ import wave
 from dataclasses import replace
 from pathlib import Path
 
-import av
-import numpy as np
 import pytest
 from conftest import make_wav
 from test_transcription import FakeEngine
@@ -20,11 +20,12 @@ from test_transcription import FakeEngine
 from classscribe.application.desktop import DesktopServices
 from classscribe.application.library import SessionLibrary
 from classscribe.application.preferences import PreferenceStore
-from classscribe.application.youtube import YouTubeService
+from classscribe.application.youtube import YouTubeService, coerce_metadata
 from classscribe.cli import commands
 from classscribe.config import Settings
 from classscribe.sessions.manager import SessionManager
 from classscribe.sessions.models import Session, Status
+from classscribe.transcription.engine import RawSegment
 from classscribe.transcription.service import transcribe_session
 from classscribe.youtube import (
     YouTubeImportError,
@@ -39,6 +40,8 @@ from classscribe.youtube import (
 
 VIDEO_ID = "dQw4w9WgXcQ"
 CANONICAL_URL = f"https://www.youtube.com/watch?v={VIDEO_ID}"
+VIDEO_ID_B = "jNQXAC9IVRw"
+CANONICAL_URL_B = f"https://www.youtube.com/watch?v={VIDEO_ID_B}"
 
 
 class FakeYouTubeClient:
@@ -48,9 +51,16 @@ class FakeYouTubeClient:
         self.inspected: list[str] = []
         self.downloaded: list[str] = []
 
-    def inspect(self, url: str) -> YouTubeMetadata:
+    def _metadata_for(self, url: str) -> YouTubeMetadata:
         vid, canonical = parse_youtube_url(url)
-        self.inspected.append(canonical)
+        if vid == VIDEO_ID_B:
+            return YouTubeMetadata(
+                video_id=vid,
+                url=canonical,
+                title="Lecture 05: Page Tables",
+                channel="OS Kernel Lab",
+                duration_seconds=float(self.seconds),
+            )
         return YouTubeMetadata(
             video_id=vid,
             url=canonical,
@@ -59,10 +69,15 @@ class FakeYouTubeClient:
             duration_seconds=float(self.seconds),
         )
 
+    def inspect(self, url: str) -> YouTubeMetadata:
+        metadata = self._metadata_for(url)
+        self.inspected.append(metadata.url)
+        return metadata
+
     def download_audio(
         self, url: str, directory: Path, progress=None
     ) -> tuple[YouTubeMetadata, Path]:
-        metadata = self.inspect(url)
+        metadata = self._metadata_for(url)
         self.downloaded.append(metadata.url)
         if progress:
             progress(500, 1000)
@@ -117,20 +132,35 @@ def test_reject_invalid_or_non_video_youtube_urls(invalid_url: str):
         parse_youtube_url(invalid_url)
 
 
-def test_offline_mode_blocks_youtube_before_client_access(tmp_path):
-    client = FakeYouTubeClient()
+def test_offline_mode_does_not_block_youtube_acquisition(tmp_path):
+    client = FakeYouTubeClient(seconds=2)
     service = YouTubeService(client_factory=lambda: client)
     settings = Settings(
         recordings_dir=tmp_path / "recordings",
         transcripts_dir=tmp_path / "transcripts",
         offline=True,
     )
-    with pytest.raises(RuntimeError, match="offline mode"):
-        service.inspect(settings, CANONICAL_URL)
-    with pytest.raises(RuntimeError, match="offline mode"):
-        service.import_session(settings, CANONICAL_URL)
-    assert client.inspected == []
-    assert client.downloaded == []
+    inspected = service.inspect(settings, f"https://youtu.be/{VIDEO_ID}")
+    assert inspected.video_id == VIDEO_ID
+    assert client.inspected == [CANONICAL_URL]
+
+    result = service.import_session(settings, CANONICAL_URL, metadata=inspected)
+    assert result.session.status == Status.RECORDED
+    assert result.session.recording_finalized is True
+    assert (result.directory / "system.wav").is_file()
+    assert client.inspected == [CANONICAL_URL]
+    assert client.downloaded == [CANONICAL_URL]
+
+    # With a cached local model (FakeEngine), offline transcription succeeds.
+    manager = SessionManager(settings.recordings_dir)
+    out = transcribe_session(
+        manager,
+        result.directory,
+        result.session,
+        settings,
+        engine_factory=lambda _: FakeEngine(),
+    )
+    assert (out / "transcript.json").is_file()
 
 
 def test_store_youtube_audio_rotates_wav_parts_and_preserves_pcm(tmp_path):
@@ -159,7 +189,18 @@ def test_store_youtube_audio_rotates_wav_parts_and_preserves_pcm(tmp_path):
     assert total_frames == 32_000
 
 
+def test_store_youtube_audio_missing_pyav_raises_actionable_error(tmp_path, monkeypatch):
+    out_dir = tmp_path / "session"
+    out_dir.mkdir()
+    compressed = out_dir / "audio.webm"
+    compressed.write_bytes(b"non-wav-compressed-container")
+    monkeypatch.setitem(sys.modules, "av", None)
+    with pytest.raises(RuntimeError, match=r'pip install -e "\.\[youtube\]"'):
+        store_youtube_audio(compressed, out_dir)
+
+
 def test_store_youtube_audio_decodes_compressed_container_via_pyav(tmp_path):
+    av = pytest.importorskip("av")
     out_dir = tmp_path / "session"
     out_dir.mkdir()
     compressed = out_dir / "audio.ogg"
@@ -167,11 +208,18 @@ def test_store_youtube_audio_decodes_compressed_container_via_pyav(tmp_path):
     total_samples = sample_rate * 2  # 2 seconds
     with av.open(str(compressed), "w") as container:
         stream = container.add_stream("libopus", rate=sample_rate)
-        samples = (np.sin(np.linspace(0, 440 * 2 * np.pi, total_samples)) * 12000).astype(np.int16)
-        frame = av.AudioFrame.from_ndarray(samples.reshape(1, -1), format="s16", layout="mono")
+        frame = av.AudioFrame(format="s16", layout="mono", samples=total_samples)
         frame.sample_rate = sample_rate
         frame.pts = 0
         frame.time_base = fractions.Fraction(1, sample_rate)
+        samples = array.array(
+            "h",
+            (
+                int(math.sin(2.0 * math.pi * 440.0 * idx / sample_rate) * 12000)
+                for idx in range(total_samples)
+            ),
+        )
+        frame.planes[0].update(samples.tobytes())
         for packet in stream.encode(frame):
             container.mux(packet)
         for packet in stream.encode(None):
@@ -196,14 +244,17 @@ def test_import_youtube_session_pipeline_and_retranscription(tmp_path):
     manager = SessionManager(recordings_dir)
     client = FakeYouTubeClient(seconds=3)
     progress_events: list[YouTubeImportProgress] = []
+    prepared_statuses: list[Status] = []
 
     directory, session = import_youtube_session(
         manager,
         f"https://youtu.be/{VIDEO_ID}?t=10",
         client=client,
+        prepared=lambda _dir, sess, _meta: prepared_statuses.append(sess.status),
         progress=progress_events.append,
     )
 
+    assert prepared_statuses == [Status.IMPORTING]
     assert session.status == Status.RECORDED
     assert session.recording_finalized is True
     assert session.source_kind == "youtube"
@@ -218,6 +269,7 @@ def test_import_youtube_session_pipeline_and_retranscription(tmp_path):
         "duration_seconds": 3.0,
         "upload_date": "",
     }
+    assert "system" in session.tracks
     assert (directory / "system.wav").is_file()
     assert list(directory.glob("source-*")) == []
     assert [e.stage for e in progress_events] == [
@@ -230,19 +282,29 @@ def test_import_youtube_session_pipeline_and_retranscription(tmp_path):
     ]
 
     # Send the imported YouTube session through the EXISTING transcription pipeline.
+    transcribe_events = []
     result = transcribe_session(
-        manager, directory, session, settings, engine_factory=lambda _: FakeEngine()
+        manager,
+        directory,
+        session,
+        settings,
+        engine_factory=lambda _: FakeEngine(),
+        progress=transcribe_events.append,
     )
+    assert {e.source for e in transcribe_events if e.source} == {"media"}
     transcript = json.loads((result / "transcript.json").read_text(encoding="utf-8"))
     assert transcript["source_kind"] == "youtube"
     assert transcript["source_url"] == CANONICAL_URL
     assert transcript["youtube"]["video_id"] == VIDEO_ID
-    assert [s["source"] for s in transcript["segments"]] == ["system"]
+    assert [s["source"] for s in transcript["segments"]] == ["media"]
+    assert transcript["segments"][0]["audio_file"] == "system.wav"
     assert transcript["segments"][0]["text"] == "La memoria caché"
 
     md = (result / "transcript.md").read_text(encoding="utf-8")
     assert f"Source: {CANONICAL_URL}" in md
-    assert "[00:00:00] CLASE" in md
+    assert "VIDEO = imported media" in md
+    assert "[00:00:00] VIDEO" in md
+    assert "[00:00:00] CLASE" not in md
     assert "La memoria caché" in md
 
     # Re-transcribing uses local system.wav without re-downloading from YouTube.
@@ -257,7 +319,7 @@ def test_import_youtube_session_pipeline_and_retranscription(tmp_path):
     assert second_result != result
     assert client.downloaded == downloads_before
 
-    # SessionLibrary exposes YouTube metadata and transcript segments to GUI/CLI.
+    # SessionLibrary exposes YouTube metadata and VIDEO transcript segments to GUI/CLI.
     library = SessionLibrary(settings)
     summaries = library.list_sessions()
     assert len(summaries) == 1
@@ -270,25 +332,101 @@ def test_import_youtube_session_pipeline_and_retranscription(tmp_path):
     assert len(detail["runs"]) == 2
     rows = library.transcript(result)
     assert len(rows) == 1
-    assert rows[0]["speaker"] == "CLASS"
+    assert rows[0]["source"] == "media"
+    assert rows[0]["speaker"] == "VIDEO"
     assert rows[0]["time"] == "00:00:00"
     assert rows[0]["text"] == "La memoria caché"
 
 
-def test_import_youtube_session_failure_marks_session_failed(tmp_path):
+def test_import_youtube_session_failure_marks_session_failed_and_blocks_transcription(tmp_path):
     manager = SessionManager(tmp_path / "recordings")
     client = FakeYouTubeClient(fail_download=True)
+    prepared_statuses: list[Status] = []
     with pytest.raises(YouTubeImportError, match="Simulated network failure"):
         import_youtube_session(
-            manager, CANONICAL_URL, title="Custom Title", course="Custom Course", client=client
+            manager,
+            CANONICAL_URL,
+            title="Custom Title",
+            course="Custom Course",
+            client=client,
+            prepared=lambda _dir, sess, _meta: prepared_statuses.append(sess.status),
         )
+    assert prepared_statuses == [Status.IMPORTING]
     dirs = list(manager.root.iterdir())
     assert len(dirs) == 1
-    failed_session = manager.load(dirs[0])
+    failed_dir = dirs[0]
+    failed_session = manager.load(failed_dir)
     assert failed_session.status == Status.FAILED
     assert failed_session.recording_finalized is False
+    assert failed_session.tracks == {}
+    assert list(failed_dir.glob("source-*")) == []
     assert failed_session.title == "Custom Title"
     assert failed_session.course == "Custom Course"
+
+    with pytest.raises(ValueError, match="finalized"):
+        transcribe_session(
+            manager,
+            failed_dir,
+            failed_session,
+            Settings(recordings_dir=manager.root, transcripts_dir=tmp_path / "transcripts"),
+            engine_factory=lambda _: FakeEngine(),
+        )
+
+
+def test_youtube_media_segments_preserve_repeated_text_across_overlap_windows(tmp_path):
+    recordings_dir = tmp_path / "recordings"
+    transcripts_dir = tmp_path / "transcripts"
+    settings = Settings(recordings_dir=recordings_dir, transcripts_dir=transcripts_dir)
+    manager = SessionManager(recordings_dir)
+    directory, session = manager.create("Long YouTube Lecture", "CS Systems")
+    make_wav(directory / "system.wav", seconds=301, rate=20)
+    session.source_kind = "youtube"
+    session.source_url = CANONICAL_URL
+    session.started_at = "2026-10-15T18:30:00-05:00"
+    session.ended_at = "2026-10-15T18:35:01-05:00"
+    session.duration_seconds = 301.0
+    session.recording_finalized = True
+    session.status = Status.RECORDED
+    session.tracks = {
+        "system": {
+            "sample_rate": 20,
+            "channels": 1,
+            "sample_width_bytes": 2,
+            "start_offset_seconds": 0.0,
+            "frames": 6020,
+            "duration_seconds": 301.0,
+            "parts": [{"file": "system.wav", "start_frame": 0, "frames": 6020}],
+            "source_kind": "youtube",
+            "source_url": CANONICAL_URL,
+            "video_id": VIDEO_ID,
+            "channel": "CS Systems",
+        }
+    }
+    manager.save(directory, session)
+
+    scripts = [
+        [
+            RawSegment(290, 291, "Important definition."),
+            RawSegment(294, 295, "Important definition."),
+        ],
+        [RawSegment(5, 6, "Important definition."), RawSegment(9, 10, "Important definition.")],
+    ]
+    calls = [0]
+
+    class WindowEngine(FakeEngine):
+        def transcribe(self, path, language):
+            idx = calls[0]
+            calls[0] += 1
+            return iter(scripts[idx]), "es"
+
+    result = transcribe_session(
+        manager, directory, session, settings, engine_factory=lambda _: WindowEngine()
+    )
+    transcript = json.loads((result / "transcript.json").read_text(encoding="utf-8"))
+    segments = transcript["segments"]
+    assert [s["source"] for s in segments] == ["media", "media"]
+    assert [s["text"] for s in segments] == ["Important definition.", "Important definition."]
+    assert [s["audio_start"] for s in segments] == [290, 294]
 
 
 def test_session_model_validates_source_kind():
@@ -363,7 +501,7 @@ def test_ytdlp_client_inspect_and_download_with_fake_module(tmp_path, monkeypatc
     assert progress_tuples == [(50, 100)]
 
 
-def test_desktop_services_youtube_inspect_and_import(tmp_path):
+def test_desktop_services_youtube_inspect_and_import_reuses_metadata(tmp_path):
     store = PreferenceStore(tmp_path / "prefs.json", tmp_path / "data")
     client = FakeYouTubeClient(seconds=2)
     desktop = DesktopServices(store, youtube=YouTubeService(client_factory=lambda: client))
@@ -372,20 +510,52 @@ def test_desktop_services_youtube_inspect_and_import(tmp_path):
     assert inspected["video_id"] == VIDEO_ID
     assert inspected["title"] == "Lecture 04: Virtual Memory"
     assert inspected["duration"] == "00:00:02"
+    assert client.inspected == [CANONICAL_URL]
 
     emitted: list[tuple[str, object]] = []
+    # Equivalent canonical URL reuses inspected metadata without a second client.inspect() call.
     detail = desktop.import_youtube(
         store.load(),
         CANONICAL_URL,
         "Overridden Title",
         "Overridden Course",
         lambda name, payload: emitted.append((name, payload)),
+        inspected_metadata=inspected,
     )
+    assert client.inspected == [CANONICAL_URL]
+    assert client.downloaded == [CANONICAL_URL]
     assert detail["session"]["title"] == "Overridden Title"
     assert detail["session"]["course"] == "Overridden Course"
     assert detail["session"]["source_kind"] == "youtube"
     assert detail["session"]["source_url"] == CANONICAL_URL
     assert any(name == "youtube" for name, _ in emitted)
+
+
+def test_desktop_services_youtube_ignores_stale_metadata_when_url_changes(tmp_path):
+    store = PreferenceStore(tmp_path / "prefs.json", tmp_path / "data")
+    client = FakeYouTubeClient(seconds=2)
+    desktop = DesktopServices(store, youtube=YouTubeService(client_factory=lambda: client))
+
+    # 1. Inspect video A
+    inspected_a = desktop.inspect_youtube(store.load(), f"https://youtu.be/{VIDEO_ID}")
+    assert client.inspected == [CANONICAL_URL]
+
+    # 2. User changes URL to video B; stale metadata A must NOT be reused
+    assert coerce_metadata(f"https://youtu.be/{VIDEO_ID_B}", inspected_a) is None
+    detail_b = desktop.import_youtube(
+        store.load(),
+        f"https://youtu.be/{VIDEO_ID_B}",
+        "",
+        "",
+        lambda _name, _payload: None,
+        inspected_metadata=inspected_a,
+    )
+    assert client.inspected == [CANONICAL_URL, CANONICAL_URL_B]
+    assert client.downloaded == [CANONICAL_URL_B]
+    assert detail_b["session"]["video_id"] == VIDEO_ID_B
+    assert detail_b["session"]["source_url"] == CANONICAL_URL_B
+    assert detail_b["session"]["title"] == "Lecture 05: Page Tables"
+    assert detail_b["session"]["course"] == "OS Kernel Lab"
 
 
 def test_cli_youtube_inspect_import_and_transcribe(tmp_path, monkeypatch, capsys):
@@ -450,7 +620,7 @@ def test_youtube_module_import_does_not_load_ytdlp_or_heavy_deps():
 import sys
 class Block:
     def find_spec(self, fullname, *args):
-        if fullname.split('.')[0] in {'yt_dlp', 'PySide6', 'faster_whisper', 'ctranslate2'}:
+        if fullname.split('.')[0] in {'yt_dlp', 'av', 'PySide6', 'faster_whisper', 'ctranslate2'}:
             raise AssertionError(fullname)
 sys.meta_path.insert(0, Block())
 import classscribe.youtube

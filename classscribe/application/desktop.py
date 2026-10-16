@@ -51,12 +51,14 @@ class DesktopServices:
         title: str,
         course: str,
         emit: Callable[[str, Any], None],
+        inspected_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         result = self.youtube.import_session(
             load_settings(None, values),
             url,
             title,
             course,
+            metadata=inspected_metadata,
             prepared=lambda path, session, meta: emit(
                 "prepared",
                 {

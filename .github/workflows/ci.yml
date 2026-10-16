@@ -3,7 +3,7 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
-  test:
+  core:
     strategy:
       fail-fast: false
       matrix:
@@ -15,9 +15,22 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -e ".[dev]"
-      - run: python -m pytest
+      - run: python -m pytest --ignore=tests/test_youtube.py --ignore=tests/test_gui.py
       - run: python -m ruff check .
       - run: python -m ruff format --check .
+  youtube:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e ".[dev,youtube]"
+      - run: python -m pytest tests/test_youtube.py
   gui:
     runs-on: windows-latest
     env:
@@ -27,5 +40,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install -e ".[dev,gui]"
+      - run: python -m pip install -e ".[dev,gui,youtube]"
       - run: python -m pytest tests/test_gui.py tests/test_application_gui_core.py

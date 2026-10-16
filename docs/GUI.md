@@ -37,14 +37,14 @@ window is 1000×650; long forms scroll. The sidebar contains Home, Classes and S
 
 ## Pages
 
-* Home: course/title, YouTube URL inspect/import card, devices, mic toggle, auto-transcription, model/device and Record.
+* Home: course/title, YouTube URL inspect/import card (reusing inspected metadata when importing the same canonical video URL/ID and discarding it if the URL changes), devices, mic toggle, auto-transcription, model/device and Record.
 * Recording: elapsed time, system/mic meters, startup/saving states and Stop.
 * Recording saved: duration, audio status (or YouTube source), transcribe and recording folder.
-* Transcribing: stages (including YouTube download/conversion stages), processed audio/bytes, actual engine device and progress.
+* Transcribing: stages (including YouTube download/conversion stages and `Transcribing class audio` / `Transcribing my microphone` / `Transcribing video audio`), processed audio/bytes, actual engine device and progress.
 * Transcription completed: open Markdown, open folder, view transcript and classes.
-* Classes: date-sorted session cards with recording/YouTube source badge and transcription status.
+* Classes: date-sorted session cards with recording/YouTube source badge (`Importing` / `YouTube audio` / `Recording` / `Transcribed`) and transcription status.
 * Session detail: metadata (including YouTube channel/URL when applicable), audio availability, all runs and transcribe again.
-* Transcript: virtualized chronological timestamp/CLASS/ME entries from JSON.
+* Transcript: virtualized chronological timestamp and `CLASS` / `ME` / `VIDEO` entries from JSON (`system` → `CLASS`, `microphone` → `ME`, `media` → `VIDEO`).
 * Settings: themes, devices, transcription, storage and manual diagnostics.
 
 ## Recording lifetime
@@ -75,6 +75,8 @@ window iterator is exhausted, using ownership intervals so overlap is not double
 Total duration is the sum of track frames/sample rates: class and mic are processed
 separately, so it can exceed the session wall-clock duration. Progress is coarse (normally
 five-minute windows), not an ETA. Loading/preparation/merge/publication are indeterminate.
+For YouTube sessions, the physical `system.wav` track is translated to semantic `media`
+so progress displays `Transcribing video audio` and segments carry `"source": "media"`.
 The core works identically without a callback and has no Qt imports.
 
 Original audio, overlap ownership, durable partial JSONL, transactional publication,
@@ -97,15 +99,18 @@ rejected by the existing core rather than selecting an arbitrary endpoint.
 
 Diagnostics reuses doctor. Its default check does not load a model or run inference;
 the optional inference checkbox may download the model unless offline mode is enabled.
-Model-cache status checks for local files and explicitly does not claim successful
-loading. CUDA visibility is not presented as proof that inference works.
+Offline mode restricts Whisper model downloads to the local cache; YouTube metadata
+inspection and audio download still use the network when invoked. Model-cache status
+checks for local files and explicitly does not claim successful loading. CUDA visibility
+is not presented as proof that inference works.
 
 ## Validation
 
 Tests run offline with mocked hardware and engines. `test_application_gui_core.py` runs
 without Qt. `test_gui.py` skips if PySide6 is absent and otherwise uses the offscreen
-platform. The original Windows/Linux core CI matrix stays lightweight (`.[dev]`);
-a separate Windows GUI job installs `.[dev,gui]` and validates Qt lifecycle and QML.
+platform. GitHub Actions keeps the Windows/Linux `core` matrix lightweight (`.[dev]`),
+runs YouTube integration tests in a dedicated `youtube` matrix (`.[dev,youtube]`), and
+runs a Windows `gui` job with `.[dev,gui,youtube]` to validate Qt lifecycle and QML.
 
 ```powershell
 python -m pytest

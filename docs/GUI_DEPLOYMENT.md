@@ -4,7 +4,7 @@ The supported development entry points are `classscribe-gui` and
 `python -m classscribe.gui`. Install with 64-bit Python 3.12:
 
 ```powershell
-python -m pip install -e ".[audio,transcription,cuda,gui]"
+python -m pip install -e ".[audio,transcription,cuda,gui,youtube]"
 classscribe-gui
 ```
 
@@ -19,7 +19,7 @@ It wraps Nuitka and generates a `pysidedeploy.spec` configuration. Work in a ded
 Windows build environment with a supported C/C++ compiler and the intended dependencies:
 
 ```powershell
-python -m pip install -e ".[audio,transcription,cuda,gui]"
+python -m pip install -e ".[audio,transcription,cuda,gui,youtube]"
 pyside6-deploy packaging/desktop.py --init
 # Inspect and adjust the generated pysidedeploy.spec before building.
 pyside6-deploy -c pysidedeploy.spec --dry-run
@@ -39,8 +39,9 @@ Whisper, CTranslate2 and PyAudioWPatch use lazy imports/native dependencies. Ver
 their inclusion explicitly in the deployment report; QML scanning alone will not
 find every Python audio/inference dependency. Include the faster-whisper VAD assets,
 PyAV libraries, onnxruntime and any required CTranslate2 native libraries. CUDA drivers
-remain a machine prerequisite. Follow [Windows CUDA setup](TRANSCRIPTION_WINDOWS.md)
-for cuBLAS/cuDNN; do not assume a working development environment proves portability.
+remain a machine prerequisite. The `cuda` extra installs `nvidia-cublas-cu12` and
+`nvidia-cudnn-cu12` on Windows; do not assume a working development environment proves
+portability without testing on a clean target machine.
 
 Do not include model weights, recordings, transcripts, preferences, credentials, the
 virtual environment, or `.tools` in a distributable. Models download into the configured

@@ -146,9 +146,12 @@ def test_model_cache_and_offline_behavior(monkeypatch, tmp_path, cached, offline
 def test_windows_dll_handles_retained_and_registration_idempotent(monkeypatch, tmp_path):
     from classscribe.transcription import runtime
 
-    binary_dir = tmp_path / "nvidia" / "cublas" / "bin"
-    binary_dir.mkdir(parents=True)
-    (binary_dir / "fake.dll").write_bytes(b"")
+    cublas_dir = tmp_path / "nvidia" / "cublas" / "bin"
+    cudnn_dir = tmp_path / "nvidia" / "cudnn" / "bin"
+    cublas_dir.mkdir(parents=True)
+    cudnn_dir.mkdir(parents=True)
+    (cublas_dir / "cublas64_12.dll").write_bytes(b"")
+    (cudnn_dir / "cudnn64_9.dll").write_bytes(b"")
     handles = []
 
     def register(path):
@@ -165,10 +168,30 @@ def test_windows_dll_handles_retained_and_registration_idempotent(monkeypatch, t
     monkeypatch.setattr(
         runtime.importlib.util,
         "find_spec",
-        lambda _: SimpleNamespace(submodule_search_locations=[str(tmp_path / "nvidia")]),
+        lambda pkg: (
+            SimpleNamespace(submodule_search_locations=[str(tmp_path / "nvidia")])
+            if pkg == "nvidia"
+            else None
+        ),
     )
     runtime.configure_cuda_libraries()
     runtime.configure_cuda_libraries()
-    assert len(handles) == 1
+    assert len(handles) == 2
     assert runtime._dll_handles == handles
-    assert fake_os.environ["PATH"] == str(binary_dir) + ";existing"
+    assert str(cublas_dir) in fake_os.environ["PATH"]
+    assert str(cudnn_dir) in fake_os.environ["PATH"]
+
+
+def test_pyproject_cuda_extra_includes_windows_cudnn():
+    import tomllib
+    from pathlib import Path
+
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    cuda_deps = data["project"]["optional-dependencies"]["cuda"]
+    assert any(
+        dep.startswith("nvidia-cublas-cu12") and "sys_platform" not in dep for dep in cuda_deps
+    )
+    assert any(
+        dep.startswith("nvidia-cudnn-cu12") and "sys_platform" not in dep for dep in cuda_deps
+    )

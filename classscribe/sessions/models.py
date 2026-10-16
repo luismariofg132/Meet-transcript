@@ -9,6 +9,7 @@ from classscribe import __version__
 class Status(StrEnum):
     CREATED = "created"
     RECORDING = "recording"
+    IMPORTING = "importing"
     RECORDED = "recorded"
     TRANSCRIBING = "transcribing"
     COMPLETED = "completed"
@@ -16,8 +17,9 @@ class Status(StrEnum):
 
 
 TRANSITIONS = {
-    Status.CREATED: {Status.RECORDING, Status.FAILED},
+    Status.CREATED: {Status.RECORDING, Status.IMPORTING, Status.FAILED},
     Status.RECORDING: {Status.RECORDED, Status.FAILED},
+    Status.IMPORTING: {Status.RECORDED, Status.FAILED},
     Status.RECORDED: {Status.TRANSCRIBING},
     Status.TRANSCRIBING: {Status.COMPLETED, Status.FAILED},
     Status.COMPLETED: {Status.TRANSCRIBING},

@@ -28,7 +28,7 @@ def test_headless_imports_do_not_require_qt_or_whisper():
 import sys
 class Block:
     def find_spec(self, fullname, *args):
-        if fullname.split('.')[0] in {'PySide6', 'faster_whisper', 'ctranslate2'}:
+        if fullname.split('.')[0] in {'PySide6', 'faster_whisper', 'ctranslate2', 'yt_dlp', 'av'}:
             raise AssertionError(fullname)
 sys.meta_path.insert(0, Block())
 import classscribe.gui.app
@@ -164,7 +164,37 @@ def test_invalid_preferences_preserve_saved_file(tmp_path, key, value):
 def test_library_skips_corrupt_metadata_and_rejects_external_transcript(tmp_path):
     (tmp_path / "broken").mkdir()
     (tmp_path / "broken" / "session.json").write_text(json.dumps({"schema_version": 999}))
-    library = SessionLibrary(Settings(recordings_dir=tmp_path, transcripts_dir=tmp_path / "t"))
+    t_dir = tmp_path / "t"
+    library = SessionLibrary(Settings(recordings_dir=tmp_path, transcripts_dir=t_dir))
     assert library.list_sessions() == []
     with pytest.raises(ValueError, match="inside"):
         library.transcript(tmp_path)
+
+    run_res = t_dir / "session" / "run" / "result"
+    run_res.mkdir(parents=True)
+    (run_res / "transcript.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "segments": [
+                    {"source": "system", "start": 0.0, "end": 1.0, "text": "Class"},
+                    {"source": "microphone", "start": 1.0, "end": 2.0, "text": "Me"},
+                    {"source": "media", "start": 2.0, "end": 3.0, "text": "Video"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert [row["speaker"] for row in library.transcript(run_res)] == ["CLASS", "ME", "VIDEO"]
+
+    (run_res / "transcript.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "segments": [{"source": "unknown", "start": 0.0, "end": 1.0, "text": "Bad"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="Unknown transcript segment source"):
+        library.transcript(run_res)

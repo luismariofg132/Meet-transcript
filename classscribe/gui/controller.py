@@ -9,6 +9,7 @@ from PySide6.QtGui import QDesktopServices
 
 from classscribe.application.desktop import DesktopServices
 from classscribe.application.preferences import defaults
+from classscribe.application.youtube import coerce_metadata
 from classscribe.gui.models import RowsModel
 from classscribe.gui.workers import Job
 from classscribe.storage import timestamp
@@ -221,6 +222,10 @@ class AppController(QObject):
             self.update(error="Enter a YouTube video URL before importing.")
             return
         values = dict(self._prefs)
+        matched = coerce_metadata(url.strip(), self._state["youtube"])
+        inspected = dict(self._state["youtube"]) if matched is not None else None
+        if matched is None:
+            self._state["youtube"] = {}
         self.update(
             page="transcribing",
             stage="Inspecting YouTube metadata",
@@ -229,17 +234,17 @@ class AppController(QObject):
             actualDevice="",
             result="",
             selected={
-                "title": title.strip() or self._state["youtube"].get("title", "YouTube video"),
-                "course": course.strip() or self._state["youtube"].get("channel", ""),
+                "title": title.strip() or (matched.title if matched else "YouTube video"),
+                "course": course.strip() or (matched.channel if matched else ""),
                 "microphone": False,
                 "source_kind": "youtube",
-                "source_url": url.strip(),
+                "source_url": matched.url if matched else url.strip(),
             },
         )
         self.launch(
             "import_youtube",
             lambda emit: self.services.import_youtube(
-                values, url.strip(), title.strip(), course.strip(), emit
+                values, url.strip(), title.strip(), course.strip(), emit, inspected
             ),
         )
 
@@ -332,11 +337,18 @@ class AppController(QObject):
                 processed=processed,
             )
         elif name == "transcription":
+            is_video = (
+                value.source == "media" or self._state["selected"].get("source_kind") == "youtube"
+            )
+            source_label = (
+                "video audio"
+                if is_video
+                else ("class audio" if value.source == "system" else "my microphone")
+            )
             labels = {
                 "loading_model": "Loading Whisper model",
                 "preparing_audio": "Preparing audio",
-                "transcribing": "Transcribing "
-                + ("class audio" if value.source == "system" else "my microphone"),
+                "transcribing": "Transcribing " + source_label,
                 "merging": "Combining transcript",
                 "publishing": "Saving transcript",
                 "completed": "Completed",

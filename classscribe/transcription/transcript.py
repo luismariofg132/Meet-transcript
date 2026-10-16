@@ -4,6 +4,12 @@ from typing import Any
 
 from classscribe.storage import timestamp
 
+MARKDOWN_SOURCE_LABELS = {
+    "system": "CLASE",
+    "microphone": "YO",
+    "media": "VIDEO",
+}
+
 
 @dataclass(frozen=True)
 class Segment:
@@ -17,7 +23,7 @@ class Segment:
     audio_end: float
 
     def __post_init__(self) -> None:
-        if self.source not in {"system", "microphone"}:
+        if self.source not in {"system", "microphone", "media"}:
             raise ValueError("Unknown audio source")
         if not all(
             math.isfinite(v) for v in (self.start, self.end, self.audio_start, self.audio_end)
@@ -56,7 +62,7 @@ def markdown(transcript: dict[str, Any]) -> str:
             "",
             "Automatic transcript; timestamps and recognition may be imperfect.",
             (
-                "CLASE = all system playback. YO = microphone; "
+                "CLASE = all system playback. YO = microphone. VIDEO = imported media; "
                 "these are sources, not speaker identities."
             ),
             "",
@@ -65,7 +71,10 @@ def markdown(transcript: dict[str, Any]) -> str:
         ]
     )
     for segment in transcript["segments"]:
-        label = "CLASE" if segment["source"] == "system" else "YO"
+        source = segment.get("source", "")
+        if source not in MARKDOWN_SOURCE_LABELS:
+            raise ValueError(f"Unknown transcript segment source: {source}")
+        label = MARKDOWN_SOURCE_LABELS[source]
         lines.extend([f"[{timestamp(segment['start'])}] {label}", segment["text"], ""])
     if not transcript["segments"]:
         lines.append("No transcribable speech was detected.")

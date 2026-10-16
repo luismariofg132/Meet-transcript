@@ -24,7 +24,7 @@ ColumnLayout {
         Layout.fillWidth: true
     }
     AppText {
-        text: "CLASS = system audio    ·    ME = your microphone"
+        text: "CLASS = system audio    ·    ME = your microphone    ·    VIDEO = imported media"
         color: Theme.muted
         font.pixelSize: Theme.small
     }
@@ -65,7 +65,8 @@ ColumnLayout {
                         text: speaker
                         font.pixelSize: Theme.small
                         font.weight: Font.Bold
-                        color: speaker === "CLASS" ? Theme.primary : Theme.success
+                        color: (speaker === "CLASS" || speaker === "VIDEO")
+                               ? Theme.primary : Theme.success
                     }
                     AppText {
                         text: entry.parent.text

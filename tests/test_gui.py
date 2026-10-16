@@ -118,10 +118,11 @@ class FakeServices:
             "duration": "00:02:00",
         }
 
-    def import_youtube(self, values, url, title, course, emit):
+    def import_youtube(self, values, url, title, course, emit, inspected_metadata=None):
         from classscribe.youtube import YouTubeImportProgress
 
         self.youtube_thread = QThread.currentThread()
+        self.last_inspected_metadata = inspected_metadata
         emit(
             "youtube",
             YouTubeImportProgress("downloading", 500, 1000, title or "Operating Systems Lecture"),
@@ -133,7 +134,7 @@ class FakeServices:
             "title": title or "Operating Systems Lecture",
             "course": course or "CS Department",
             "source_kind": "youtube",
-            "source_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "source_url": url,
             "channel": "CS Department",
             "video_id": "dQw4w9WgXcQ",
         }
@@ -310,6 +311,7 @@ def test_every_qml_page_loads_with_data_and_themes(qt, desktop):
             [
                 {"speaker": "CLASS", "time": "00:02:14", "text": "Memory cache"},
                 {"speaker": "ME", "time": "00:04:12", "text": "How does this work?"},
+                {"speaker": "VIDEO", "time": "00:06:00", "text": "Imported lecture audio"},
             ]
         )
         c.diagnostics.replace([{"label": "Audio backend", "value": "Mock backend"}])
@@ -374,7 +376,7 @@ def test_gui_startup_does_not_load_whisper():
 import sys
 class Block:
     def find_spec(self, fullname, *args):
-        if fullname.split('.')[0] in {'faster_whisper', 'ctranslate2'}:
+        if fullname.split('.')[0] in {'faster_whisper', 'ctranslate2', 'yt_dlp', 'av'}:
             raise AssertionError(fullname)
 sys.meta_path.insert(0, Block())
 from PySide6.QtGui import QGuiApplication
@@ -416,14 +418,31 @@ def test_youtube_inspect_and_import_with_auto_transcribe(qt, desktop):
     assert c.state["youtube"]["channel"] == "CS Department"
 
     c.setPreference("auto_transcribe", True)
-    c.importYoutube("https://youtu.be/dQw4w9WgXcQ", "Processes & Threads", "OS 101")
+    c.importYoutube("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "Processes & Threads", "OS 101")
     spin(qt, lambda: c.state["progress"] == 0.5 and c.state["page"] == "transcribing")
     assert c.state["stage"] == "Downloading YouTube audio"
+    assert s.last_inspected_metadata is not None
+    assert s.last_inspected_metadata["video_id"] == "dQw4w9WgXcQ"
     s.allow_youtube.set()
-    spin(qt, s.transcription_entered.is_set)
+    spin(qt, lambda: c.state["stage"] == "Transcribing video audio")
     assert s.finalized and imported == ["test"]
     assert c.state["selected"]["source_kind"] == "youtube"
     assert c.state["selected"]["title"] == "Processes & Threads"
+    assert c.state["stage"] == "Transcribing video audio"
     s.allow_transcription.set()
     spin(qt, lambda: c.job is None)
     assert c.state["page"] == "completed"
+
+    # Changing the URL after inspecting video A must NOT reuse video A's metadata.
+    s.allow_youtube.clear()
+    c.setPreference("auto_transcribe", False)
+    c.inspectYoutube("https://youtu.be/dQw4w9WgXcQ")
+    spin(qt, lambda: c.job is None)
+    assert c.state["youtube"]["video_id"] == "dQw4w9WgXcQ"
+    c.importYoutube("https://youtu.be/jNQXAC9IVRw", "", "")
+    spin(qt, lambda: c.state["progress"] == 0.5 and c.state["page"] == "transcribing")
+    assert s.last_inspected_metadata is None
+    assert c.state["youtube"] == {}
+    s.allow_youtube.set()
+    spin(qt, lambda: c.job is None)
+    assert c.state["page"] == "saved"
