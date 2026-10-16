@@ -21,7 +21,7 @@ icon = packaging/assets/classscribe.ico
 [python]
 
 # python packages to install
-packages = Nuitka
+packages = Nuitka==4.3
 
 # buildozer = for deploying Android application
 android_packages = buildozer==1.6.0,cython==0.29.33

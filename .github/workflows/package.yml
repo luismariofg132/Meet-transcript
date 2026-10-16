@@ -9,9 +9,18 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: classscribe-package-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: powershell
+
 jobs:
   package-windows:
     runs-on: windows-latest
+    timeout-minutes: 120
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -20,23 +29,89 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          architecture: 'x64'
           cache: 'pip'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { throw 'pip upgrade failed' }
           python -m pip install -e ".[audio,transcription,cuda,gui,youtube]"
-          python -m pip install "nuitka>=4.3.1" zstandard
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime dependency installation failed' }
+          python -m pip install "Nuitka==4.3" zstandard
+          if ($LASTEXITCODE -ne 0) { throw 'Packaging dependency installation failed' }
+
+      - name: Verify build environment
+        run: |
+          python -m nuitka --version
+          if ($LASTEXITCODE -ne 0) { throw 'Nuitka version command failed' }
+          $version = python -c "from importlib.metadata import version; print(version('Nuitka'))"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot determine Nuitka version' }
+          if ($version.Trim() -ne '4.3') { throw "Expected Nuitka 4.3, found $version" }
+          python -m pip check
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency validation failed' }
+          python -c "import PySide6, ctranslate2, faster_whisper, av, yt_dlp, pyaudiowpatch; print('Runtime imports OK')"
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime import validation failed' }
 
       - name: Build standalone Windows application
         run: |
-          powershell -ExecutionPolicy Bypass -File packaging/build.ps1 -ProduceZip
+          $python = (Get-Command python -ErrorAction Stop).Source
+          powershell -ExecutionPolicy Bypass -File packaging/build.ps1 -Python $python -ProduceZip
+          if ($LASTEXITCODE -ne 0) { throw 'Standalone build or smoke tests failed' }
+
+      - name: Build Inno Setup 6 installer and checksum
+        run: |
+          $candidates = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          )
+          $iscc = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed' }
+            $iscc = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          }
+          if (-not $iscc) { throw 'Cannot find Inno Setup 6 ISCC.exe' }
+          $version = python -c "import classscribe; print(classscribe.__version__)"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot determine ClassScribe version' }
+          $version = $version.Trim()
+          & $iscc "/DMyAppVersion=$version" packaging/installer/ClassScribe.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compilation failed' }
+          $installer = Get-Item -LiteralPath "dist\ClassScribe-Setup-$version.exe" -ErrorAction Stop
+          $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLower()
+          "$hash *$($installer.Name)" | Out-File "$($installer.FullName).sha256" -Encoding ascii
 
       - name: Upload portable ZIP artifact
         uses: actions/upload-artifact@v4
         with:
           name: ClassScribe-win64-portable
           path: |
-            dist/*.zip
-            dist/*.sha256
+            dist/ClassScribe-*-win64-portable.zip
+            dist/ClassScribe-*-win64-portable.zip.sha256
           if-no-files-found: error
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClassScribe-win64-installer
+          path: |
+            dist/ClassScribe-Setup-*.exe
+            dist/ClassScribe-Setup-*.exe.sha256
+          if-no-files-found: error
+
+      - name: Upload standalone directory for early validation
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClassScribe-win64-standalone
+          path: dist/ClassScribe/**
+          if-no-files-found: error
+
+      - name: Upload compiler failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClassScribe-nuitka-diagnostics
+          path: |
+            **/nuitka-crash-report*.xml
+            packaging/deployment/**/*.xml
+          if-no-files-found: ignore

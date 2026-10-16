@@ -21,14 +21,16 @@ py -3.12 -m venv .venv-build
 .\.venv-build\Scripts\python.exe -m pip install -e ".[audio,transcription,cuda,gui,youtube]"
 
 # Install packaging tooling
-.\.venv-build\Scripts\python.exe -m pip install "Nuitka==4.3.1" zstandard
+.\.venv-build\Scripts\python.exe -m pip install "Nuitka==4.3" zstandard
 
-# Verify compiler version (expected: 4.3.1)
+# Verify compiler version (expected: 4.3)
 .\.venv-build\Scripts\python.exe -m nuitka --version
+.\.venv-build\Scripts\python.exe -m pip check
+.\.venv-build\Scripts\python.exe -c "import PySide6, ctranslate2, faster_whisper, av, yt_dlp, pyaudiowpatch; print('Runtime imports OK')"
 ```
 
 > [!NOTE]
-> Packaging previously failed under Nuitka 4.1.1 with an internal compiler assertion (`AssertionError: assert micro_passes == 0`). Nuitka 4.3.1 is now the supported and recommended project build version. Actual build success still depends on running the packaging pipeline.
+> Packaging previously failed under Nuitka 4.1.1 with an internal compiler assertion (`AssertionError: assert micro_passes == 0`). The previous recommendation used an unavailable PyPI version. Packaging now pins exactly `Nuitka==4.3`, confirmed installable locally. This does not establish that all packaging issues are fixed: a complete build and smoke tests must still succeed.
 >
 > When compiling for the first time on a machine without MSVC in PATH, Nuitka will automatically download and cache a portable MinGW64 (GCC 15) toolchain. No manual compiler configuration is required.
 
@@ -36,7 +38,7 @@ py -3.12 -m venv .venv-build
 
 ## 2. Standalone Directory Build
 
-The primary release format is a **standalone directory bundle** (`dist/ClassScribe/`). Standalone mode preserves dynamic linking, separates native DLLs for inspection and debugging, and complies with Qt LGPL relinking requirements.
+The primary release format is a **standalone directory bundle** (`dist/ClassScribe/`). `ClassScribe.exe` alone is not portable; distribute and extract the entire portable ZIP. Standalone mode preserves dynamic linking, separates native DLLs for inspection and debugging, and complies with Qt LGPL relinking requirements.
 
 ### One-Command Build
 
@@ -170,7 +172,10 @@ An Inno Setup compiler script is provided at `packaging/installer/ClassScribe.is
 With [Inno Setup 6](https://jrsoftware.org/isdl.php) installed:
 
 ```powershell
-& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging/installer/ClassScribe.iss
+$version = & .\.venv-build\Scripts\python.exe -c "import classscribe; print(classscribe.__version__)"
+if ($LASTEXITCODE -ne 0) { throw "Cannot determine ClassScribe version" }
+& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$version" packaging/installer/ClassScribe.iss
+if ($LASTEXITCODE -ne 0) { throw "Installer compilation failed" }
 ```
 
 The installer:
@@ -184,7 +189,9 @@ The installer:
 
 ## 8. Code Signing Readiness
 
-To sign the application with a Microsoft Authenticode certificate:
+Current portable binaries and installers are **unsigned**. CI does not sign anything, and no certificate or signing secrets are configured. The future sequence, once a real Authenticode certificate is available, is: build standalone → sign ClassScribe.exe → build installer → sign installer → release. Recreate ZIPs and checksums after signing.
+
+Future signing procedure:
 
 1. Sign `ClassScribe.exe` and any bundled `.dll` / `.pyd` files before creating the installer:
    ```powershell
@@ -212,3 +219,30 @@ ClassScribe is MIT-licensed. The standalone distribution includes third-party so
 - **NVIDIA CUDA Packages**: NVIDIA CUDA Toolkit EULA. Host driver is required.
 
 See `THIRD_PARTY_NOTICES.txt` in the root and bundle directory for full texts.
+
+
+---
+
+## 10. GitHub Actions Windows Packaging
+
+With repository Actions enabled, open **GitHub repository → Actions → Windows Packaging → Run workflow**. The workflow also accepts `v*` tags, but does not run for ordinary branch pushes or pull requests. Both triggers upload Actions artifacts only; neither creates a GitHub Release.
+
+The job uses `windows-latest`, Python 3.12 x64, read-only repository permissions, a 120-minute timeout, and cancels older packaging runs for the same ref. It resolves the active Python executable and passes its absolute path to `packaging/build.ps1`. Nuitka arguments remain in the existing deployment specification.
+
+Pipeline: dependency install → environment validation (exact Nuitka 4.3, `pip check`, runtime imports) → standalone build → smoke tests in both working directories → portable ZIP and checksum → Inno Setup 6 installer → installer checksum → artifact upload. Every native command failure stops its step. Smoke tests are mandatory in CI; failed builds upload only available compiler XML diagnostics, not distribution artifacts.
+
+Inno Setup is detected in both Program Files locations and installed with Chocolatey if missing. The installer version comes from `classscribe.__version__` through the compiler's `MyAppVersion` define. Installation, shortcuts, uninstaller behavior, and preservation of user data remain unchanged.
+
+Expected downloads for version 0.1.0:
+
+| Actions artifact | Contents |
+| --- | --- |
+| `ClassScribe-win64-portable` | `ClassScribe-0.1.0-win64-portable.zip` and `.zip.sha256` |
+| `ClassScribe-win64-installer` | `ClassScribe-Setup-0.1.0.exe` and `.exe.sha256` |
+| `ClassScribe-win64-standalone` | Complete `dist/ClassScribe/` contents for early validation |
+
+The raw standalone upload duplicates bundle data and may be removed after packaging validation. No virtual environments, build directories, recordings, transcripts, or Whisper weights are uploaded as distribution artifacts. Generated binaries remain outside Git history.
+
+Nuitka is pinned exactly, but runtime dependency ranges, the Python 3.12 patch version, runner image, and Inno Setup installation may evolve; this is not a fully locked or bit-for-bit reproducible toolchain. A successful GitHub-hosted build and clean-machine acceptance testing are still required before claiming release readiness.
+
+If Actions are disabled in repository Settings, the repository owner must re-enable them under **Settings → Actions**. Editing this workflow cannot enable repository-level Actions.

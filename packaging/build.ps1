@@ -54,7 +54,6 @@ if (-not $Python -or -not (Test-Path $Python)) {
 }
 
 Write-Host "Using Python: $Python" -ForegroundColor Green
-$env:PYTHONOPTIMIZE = "1"
 
 # Verify Python version and architecture (3.12 x64)
 & $Python -c "import sys; assert sys.version_info[:2] == (3, 12), f'Python 3.12 required, found {sys.version}'; assert sys.maxsize > 2**32, '64-bit Python required'"
@@ -62,8 +61,16 @@ if ($LASTEXITCODE -ne 0) {
     Write-Error "Python verification failed. 64-bit Python 3.12 is required."
 }
 
-# Ensure Scripts directory is in PATH for tools like pyside6-deploy
-$ScriptsDir = Split-Path -Parent $Python
+# Resolve tools from the selected interpreter, including setup-python installations
+# whose Scripts directory is beside (rather than contains) python.exe.
+$ScriptsDir = (& $Python -c "import sysconfig; print(sysconfig.get_path('scripts'))").Trim()
+if ($LASTEXITCODE -ne 0) { Write-Error "Could not resolve Python Scripts directory." }
+$DeployTool = Join-Path $ScriptsDir "pyside6-deploy.exe"
+if (-not (Test-Path -LiteralPath $DeployTool)) { Write-Error "Missing deployment tool: $DeployTool" }
+$NuitkaVersion = & $Python -c "from importlib.metadata import version; print(version('Nuitka'))"
+if ($LASTEXITCODE -ne 0) { Write-Error "Could not determine Nuitka version." }
+if ($NuitkaVersion.Trim() -ne "4.3") { Write-Error "Expected Nuitka 4.3, found $NuitkaVersion" }
+$env:PYTHONOPTIMIZE = "1"
 $env:PATH = "$ScriptsDir;$env:PATH"
 
 # 3. Clean prior build output safely
@@ -103,7 +110,7 @@ if (-not (Test-Path $SpecFile)) {
     Write-Error "Spec file not found: $SpecFile"
 }
 
-& pyside6-deploy packaging/desktop.py -c $SpecFile --no-install
+& $DeployTool packaging/desktop.py -c $SpecFile --no-install
 if ($LASTEXITCODE -ne 0) {
     Write-Error "pyside6-deploy build failed with exit code $LASTEXITCODE."
 }

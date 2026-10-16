@@ -2,7 +2,9 @@
 ; Packages the pre-built standalone directory dist\ClassScribe
 
 #define MyAppName "ClassScribe"
+#ifndef MyAppVersion
 #define MyAppVersion "0.1.0"
+#endif
 #define MyAppPublisher "ClassScribe"
 #define MyAppURL "https://github.com/luismariofg132/Meet-transcript"
 #define MyAppExeName "ClassScribe.exe"
