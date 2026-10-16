@@ -6,6 +6,7 @@ import array
 import fractions
 import json
 import math
+import os
 import subprocess
 import sys
 import types
@@ -42,6 +43,73 @@ VIDEO_ID = "dQw4w9WgXcQ"
 CANONICAL_URL = f"https://www.youtube.com/watch?v={VIDEO_ID}"
 VIDEO_ID_B = "jNQXAC9IVRw"
 CANONICAL_URL_B = f"https://www.youtube.com/watch?v={VIDEO_ID_B}"
+
+
+def test_yt_dlp_loader_sets_no_lazy_before_import(monkeypatch):
+    import builtins
+
+    original_import = builtins.__import__
+    sentinel = object()
+    monkeypatch.delenv("YTDLP_NO_LAZY_EXTRACTORS", raising=False)
+
+    def checked_import(name, *args, **kwargs):
+        if name == "yt_dlp":
+            assert os.environ["YTDLP_NO_LAZY_EXTRACTORS"] == "1"
+            return types.SimpleNamespace(YoutubeDL=sentinel)
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", checked_import)
+    assert YtDlpClient()._load_yt_dlp() is sentinel
+
+
+def test_core_import_does_not_load_yt_dlp():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import classscribe.youtube, sys; "
+            "assert not any(n == 'yt_dlp' or n.startswith('yt_dlp.') for n in sys.modules)",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_real_youtube_extractor_without_lazy_registry():
+    from importlib.util import find_spec
+
+    if find_spec("yt_dlp") is None:
+        pytest.skip("Optional YouTube dependency is not installed")
+    # Fresh process: fail on any attempt to import the excluded module, even if
+    # yt-dlp would catch ImportError and silently fall back to its normal registry.
+    code = """
+import sys
+class RejectLazy:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == 'yt_dlp.extractor.lazy_extractors':
+            raise AssertionError('Lazy extractor import attempted')
+sys.meta_path.insert(0, RejectLazy())
+from classscribe.youtube import YtDlpClient
+youtube_dl = YtDlpClient()._load_yt_dlp()
+with youtube_dl({'quiet': True, 'no_warnings': True}) as downloader:
+    extractor = downloader.get_info_extractor('Youtube')
+    assert extractor.suitable('https://www.youtube.com/watch?v=dQw4w9WgXcQ')
+from yt_dlp.globals import LAZY_EXTRACTORS
+assert LAZY_EXTRACTORS.value is False
+assert 'yt_dlp.extractor.lazy_extractors' not in sys.modules
+"""
+    env = os.environ.copy()
+    env.pop("YTDLP_NO_LAZY_EXTRACTORS", None)
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 class FakeYouTubeClient:

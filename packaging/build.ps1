@@ -73,6 +73,10 @@ if ($NuitkaVersion.Trim() -ne "4.3") { Write-Error "Expected Nuitka 4.3, found $
 $env:PYTHONOPTIMIZE = "1"
 $env:PATH = "$ScriptsDir;$env:PATH"
 
+# Catch the yt-dlp memory regression before cleaning or starting compilation.
+& $Python packaging\validate_config.py packaging\pysidedeploy.spec
+if ($LASTEXITCODE -ne 0) { Write-Error "Packaging configuration validation failed." }
+
 # 3. Clean prior build output safely
 if ($Clean) {
     Write-Host "`n--- Cleaning previous build outputs ---" -ForegroundColor Yellow

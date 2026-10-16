@@ -61,6 +61,26 @@ This script:
 
 ---
 
+### yt-dlp compiler memory safeguard
+
+The first Windows Actions build failed with **MSVC C1002: compiler is out of heap space in pass 2** while compiling `module.yt_dlp.extractor.lazy_extractors.c`. The previous broad yt-dlp inclusion compiled this enormous generated registry; this was not a CUDA or Whisper failure.
+
+The configuration retains `--include-package=yt_dlp` and adds `--nofollow-import-to=yt_dlp.extractor.lazy_extractors` plus `--low-memory`. In Nuitka 4.3, the no-follow decision takes precedence during explicit package scanning as well as ordinary imports; a small C-generation probe verified that the excluded module produces no C file while other package modules remain included. Compiler selection is unchanged (MSVC on the observed runner).
+
+`YtDlpClient` sets `YTDLP_NO_LAZY_EXTRACTORS=1` before importing `YoutubeDL`, as supported by [yt-dlp 2026.8.19](https://github.com/yt-dlp/yt-dlp/blob/2026.08.19/yt_dlp/extractor/extractors.py). yt-dlp then uses its normal `_extractors` registry. This still includes unrelated extractors (TikTok, Instagram, Vimeo, Reddit and Generic): its default registry imports them, and even `allowed_extractors` filters only after loading that registry. Retaining the normal registry avoids a fragile replacement of yt-dlp internals. ClassScribe continues to accept only single YouTube videos.
+
+`packaging/validate_config.py` checks these safeguards before cleanup or compilation. Packaged smoke mode instantiates the real `YoutubeDL`, resolves the YouTube extractor without network access, rejects a loaded lazy registry, and checks that the excluded module cannot be found in the compiled bundle. Both existing smoke launches run this check. The unit tests also block any attempted lazy-registry import in a fresh process.
+
+The dry-run command can be inspected without compiling:
+
+```powershell
+.\.venv-build\Scripts\pyside6-deploy.exe packaging/desktop.py -c packaging/pysidedeploy.spec --no-install --dry-run
+```
+
+A dry run and offline extractor tests do not prove that the entire standalone bundle builds or downloads successfully. Rerun Windows Packaging and the clean-machine acceptance checks to confirm the correction.
+
+---
+
 ## 3. Bundle Structure
 
 The built directory at `dist/ClassScribe/` contains:
@@ -137,7 +157,7 @@ Checks verified automatically:
 4. CTranslate2 native binary and extension exist.
 5. PyAV / FFmpeg shared libraries exist.
 6. PyAudioWPatch (`_portaudiowpatch*.pyd`) WASAPI extension exists.
-7. `yt_dlp` package is present.
+7. `yt_dlp` package is present; the packaged entry point resolves its real YouTube extractor offline and rejects the excluded lazy registry.
 8. Silero VAD asset (`silero_vad_v6.onnx`) is present.
 9. No model weights (`.safetensors`, `.bin`) or user recordings are bundled.
 10. Headless smoke execution with `CLASSSCRIBE_SMOKE_TEST=1` launches the QML engine, initializes controller and desktop services, and exits cleanly with code 0.

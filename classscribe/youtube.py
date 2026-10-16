@@ -147,6 +147,9 @@ def resolve_node_runtime() -> str | None:
 
 class YtDlpClient:
     def _load_yt_dlp(self) -> Any:
+        # yt-dlp 2026.8.19 supports this before extractor initialization.
+        # The generated lazy registry is excluded from the standalone build.
+        os.environ["YTDLP_NO_LAZY_EXTRACTORS"] = "1"
         try:
             from yt_dlp import YoutubeDL
         except ImportError as exc:

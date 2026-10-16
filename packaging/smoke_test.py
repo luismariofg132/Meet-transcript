@@ -82,7 +82,7 @@ def validate_bundle(bundle_dir: Path) -> list[str]:
 
 
 def run_smoke_execution(bundle_dir: Path, working_dir: Path | None = None) -> tuple[int, str, str]:
-    """Execute ClassScribe.exe in smoke-test mode with CLASSSCRIBE_SMOKE_TEST=1."""
+    """Check real YouTube extractor resolution, then launch the GUI in smoke mode."""
     exe = bundle_dir / "ClassScribe.exe"
     env = os.environ.copy()
     env["CLASSSCRIBE_SMOKE_TEST"] = "1"
