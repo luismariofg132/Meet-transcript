@@ -128,7 +128,7 @@ if (Test-Path $TargetDist) {
 Move-Item -Path $BuiltDist -Destination $TargetDist
 
 # Ensure main executable is named ClassScribe.exe
-if (Test-Path "$TargetDist\desktop.exe" -and -not (Test-Path "$TargetDist\ClassScribe.exe")) {
+if ((Test-Path "$TargetDist\desktop.exe") -and -not (Test-Path "$TargetDist\ClassScribe.exe")) {
     Move-Item "$TargetDist\desktop.exe" "$TargetDist\ClassScribe.exe"
 }
 

@@ -37,3 +37,5 @@ deployment/
 *.build/
 *.dist/
 *.onefile-build/
+nuitka-crash-report.xml
+nuitka-crash-report*.xml

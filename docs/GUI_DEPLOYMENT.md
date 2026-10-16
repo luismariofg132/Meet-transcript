@@ -21,10 +21,15 @@ py -3.12 -m venv .venv-build
 .\.venv-build\Scripts\python.exe -m pip install -e ".[audio,transcription,cuda,gui,youtube]"
 
 # Install packaging tooling
-.\.venv-build\Scripts\python.exe -m pip install Nuitka==4.1.1 zstandard
+.\.venv-build\Scripts\python.exe -m pip install "Nuitka==4.3.1" zstandard
+
+# Verify compiler version (expected: 4.3.1)
+.\.venv-build\Scripts\python.exe -m nuitka --version
 ```
 
 > [!NOTE]
+> Packaging previously failed under Nuitka 4.1.1 with an internal compiler assertion (`AssertionError: assert micro_passes == 0`). Nuitka 4.3.1 is now the supported and recommended project build version. Actual build success still depends on running the packaging pipeline.
+>
 > When compiling for the first time on a machine without MSVC in PATH, Nuitka will automatically download and cache a portable MinGW64 (GCC 15) toolchain. No manual compiler configuration is required.
 
 ---
@@ -35,10 +40,12 @@ The primary release format is a **standalone directory bundle** (`dist/ClassScri
 
 ### One-Command Build
 
-Execute the build script from the repository root:
+Execute the build script from the repository root, explicitly specifying the dedicated build environment to prevent accidentally reusing the development `.venv`:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File packaging/build.ps1 -ProduceZip
+powershell -ExecutionPolicy Bypass -File .\packaging\build.ps1 `
+    -Python ".\.venv-build\Scripts\python.exe" `
+    -ProduceZip
 ```
 
 This script:
