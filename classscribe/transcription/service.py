@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from collections.abc import Callable
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -12,7 +13,7 @@ from classscribe.config import Settings
 from classscribe.sessions.manager import SessionManager, now_iso
 from classscribe.sessions.models import Session, Status
 from classscribe.storage import atomic_json, exclusive_lock
-from classscribe.transcription.chunks import audio_chunks
+from classscribe.transcription.chunks import audio_chunks, chunking_metadata
 from classscribe.transcription.engine import Engine, load_engine
 from classscribe.transcription.transcript import Segment, markdown, merge_segments
 
@@ -57,6 +58,7 @@ def transcribe_session(
             "language": settings.language,
             "segments_preserved": 0,
             "stage": "loading_model",
+            "chunking": chunking_metadata(),
         }
         session.transition(Status.TRANSCRIBING)
         session.error = None
@@ -81,32 +83,51 @@ def transcribe_session(
                         report.update(
                             stage="decoding_audio", source=source, audio_file=part["file"]
                         )
-                        for chunk, chunk_start, chunk_duration in audio_chunks(path, run):
-                            report.update(stage="inference", chunk_start_seconds=chunk_start)
-                            atomic_json(run / "run.json", report)
-                            generated, language = engine.transcribe(chunk, settings.language)
-                            for raw in generated:
-                                if not raw.text.strip():
-                                    continue
-                                if not 0 <= raw.start <= raw.end <= chunk_duration + 0.1:
-                                    raise ValueError("Whisper returned an invalid chunk timestamp")
-                                segment = Segment(
-                                    source=source,
-                                    start=offset + part_offset + chunk_start + raw.start,
-                                    end=offset + part_offset + chunk_start + raw.end,
-                                    text=raw.text.strip(),
-                                    language=language,
-                                    audio_file=part["file"],
-                                    audio_start=chunk_start + raw.start,
-                                    audio_end=chunk_start + raw.end,
+                        # Explicitly close the generator even on inference failure or
+                        # cancellation, so temporary WAVs never wait for GC cleanup.
+                        with closing(audio_chunks(path, run)) as windows:
+                            for window in windows:
+                                report.update(
+                                    stage="inference",
+                                    chunk_start_seconds=window.start,
+                                    chunk_end_seconds=window.end,
+                                    keep_start_seconds=window.keep_start,
+                                    keep_end_seconds=window.keep_end,
                                 )
-                                partial.write(
-                                    json.dumps(segment.to_dict(), ensure_ascii=False) + "\n"
+                                atomic_json(run / "run.json", report)
+                                generated, language = engine.transcribe(
+                                    window.path, settings.language
                                 )
-                                partial.flush()
-                                os.fsync(partial.fileno())
-                                segments.append(segment)
-                                report["segments_preserved"] = len(segments)
+                                for raw in generated:
+                                    if not raw.text.strip():
+                                        continue
+                                    if not 0 <= raw.start <= raw.end <= window.duration + 0.1:
+                                        raise ValueError(
+                                            "Whisper returned an invalid chunk timestamp"
+                                        )
+                                    audio_start = window.start + raw.start
+                                    audio_end = window.start + raw.end
+                                    segment = Segment(
+                                        source=source,
+                                        start=offset + part_offset + audio_start,
+                                        end=offset + part_offset + audio_end,
+                                        text=raw.text.strip(),
+                                        language=language,
+                                        audio_file=part["file"],
+                                        audio_start=audio_start,
+                                        audio_end=audio_end,
+                                    )
+                                    # Compare on the original part timeline. Keep the
+                                    # whole segment; do not split text or compare sources.
+                                    if not window.owns(segment.audio_start, segment.audio_end):
+                                        continue
+                                    partial.write(
+                                        json.dumps(segment.to_dict(), ensure_ascii=False) + "\n"
+                                    )
+                                    partial.flush()
+                                    os.fsync(partial.fileno())
+                                    segments.append(segment)
+                                    report["segments_preserved"] = len(segments)
             transcript = {
                 "schema_version": 1,
                 "session_id": session.session_id,
@@ -121,6 +142,7 @@ def transcribe_session(
                 "device": engine.device,
                 "compute_type": engine.compute_type,
                 "timeline": "seconds from common recording origin",
+                "chunking": report["chunking"],
                 "segments": [segment.to_dict() for segment in merge_segments(segments)],
             }
             # A directory rename publishes the two artifacts together. Before this

@@ -1,5 +1,32 @@
 # Implementation validation
 
+## Overlapping-window change (2026-10-15)
+
+Baseline: **91 tests passed** before any changes. After the change, **130 tests passed**
+(39 new offline cases). The existing sequential chunk test was migrated to named
+`AudioWindow` fields and explicit zero overlap; all its original assertions are retained.
+
+| Command | Result |
+| --- | --- |
+| `.venv\Scripts\python.exe -m pytest -q --basetemp .tools\pytest-overlap-final` | **130 passed**, 5.04 seconds |
+| `.venv\Scripts\python.exe -m ruff check .` | **All checks passed** |
+| `.venv\Scripts\python.exe -m ruff format --check .` | **35 files already formatted** |
+| `git diff --check` | Passed |
+
+New cases cover short/exact/long audio, 0/285/570/855-second starts, no redundant trailing
+window, ownership partition and exact boundaries, invalid/zero/large overlap, sample-rate
+rounding, original PCM bytes, bounded window lengths and temporary-file cleanup. Integration
+cases cover complete crossing segments, preserved repetitions and source overlap, unchanged
+audio/session/rotated-part timestamps, chunking metadata, accepted-only partial journals,
+later-window failure/cancellation, original audio preservation and immutable retries.
+
+All tests remain offline and use synthetic PCM and scripted inference. There was no model
+download, hardware recording, or real Whisper quality benchmark for this change. The rule
+and its remaining timestamp/segmentation limitations are documented in
+[TRANSCRIPTION_WINDOWS.md](TRANSCRIPTION_WINDOWS.md).
+
+## Original MVP validation
+
 Executed on 2026-10-15, Windows 11, Python 3.12.14 (64-bit).
 
 ## Automated checks actually executed

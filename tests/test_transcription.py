@@ -158,9 +158,9 @@ def test_audio_chunks_bound_memory_and_preserve_offsets(tmp_path):
     source = tmp_path / "system.wav"
     make_wav(source, seconds=5, rate=8000)
     offsets = []
-    for path, start, duration in audio_chunks(source, tmp_path, seconds=2):
-        offsets.append((start, duration))
-        with wave.open(str(path)) as audio:
+    for window in audio_chunks(source, tmp_path, seconds=2, overlap_seconds=0):
+        offsets.append((window.start, window.duration))
+        with wave.open(str(window.path)) as audio:
             assert audio.getnframes() <= 16000
     assert offsets == [(0, 2), (2, 2), (4, 1)]
     assert list(tmp_path.iterdir()) == [source]

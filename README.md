@@ -256,9 +256,14 @@ is not automatic. A stale `.operation.lock` should only be removed after confirm
 ClassScribe process is using that session. Do not mark a damaged recording as finalized
 without validating its files and timing metadata.
 
-Transcription decodes at most a five-minute audio window at once. This bounds audio memory,
-but words at window boundaries can lose context. The original recording remains continuous
-within each WAV part. Text segments are held in memory for the final chronological merge;
+Transcription uses five-minute windows with 15 seconds of overlap to improve context near
+long-audio boundaries while keeping audio memory bounded. Overlap is inference context only:
+duplicate overlap output is discarded through timestamp ownership before saving segments.
+Final timestamps still refer to the original recording. Overlap stays within each WAV part,
+and short recordings use one window. This improves context without guaranteeing perfect
+decoding or word-level alignment. See [window ownership](docs/TRANSCRIPTION_WINDOWS.md)
+for the exact rule and edge cases. Text segments are held in memory for the final
+chronological merge;
 the segment journal is flushed and fsynced after each segment. On failure, inspect
 `segments.partial.jsonl` and `run.json`; rerunning starts a new run, not an automatic resume.
 A final `result/` directory is the publication marker. If a crash happens after publication
