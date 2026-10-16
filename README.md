@@ -1,24 +1,30 @@
 # ClassScribe
 
-ClassScribe records university classes locally and transcribes them **after recording stops**.
+ClassScribe records university classes locally or imports lecture audio from YouTube,
+and transcribes them **after capture or import completes**.
 Windows WASAPI loopback captures what you hear from Google Meet, Teams, Zoom, a browser,
 or another desktop application. An optional microphone is recorded as a separate track.
-It has no dependency on the meeting platform or its APIs.
+Alternatively, paste a YouTube video URL to inspect metadata, download audio only, store
+it locally as a session source (`system.wav`), and send it through the **same** ClassScribe
+transcription pipeline. It has no dependency on the meeting platform or its APIs.
 
-This is an independent Python 3.12 project. It does not extend the YouTube application.
+This is an independent Python 3.12 project. It does not copy the old transcription engine
+from `Youtube_Transcrip` or build a second Whisper integration; YouTube sessions reuse the
+modern ClassScribe overlapping-window transcription pipeline, session library, and viewer.
 Use the native Qt Quick desktop interface or the fully supported CLI. There is no cloud
 service, live transcription, remote speaker diarization, or AI study feature.
 
 ## Desktop application
 
 ```powershell
-pip install -e ".[audio,transcription,cuda,gui]"
+pip install -e ".[audio,youtube,transcription,cuda,gui]"
 classscribe-gui
 # Alternative:
 python -m classscribe.gui
 ```
 
-The optional `gui` extra adds PySide6; headless installations do not require Qt.
+The optional `gui` extra adds PySide6; `youtube` adds `yt-dlp[default]` and PyAV for
+YouTube audio import. Headless installations do not require Qt.
 CUDA runtime setup on Windows still follows [the existing guide](docs/TRANSCRIPTION_WINDOWS.md).
 For CPU-only use, omit `cuda` and select CPU in the application.
 
@@ -26,15 +32,20 @@ On **Home**, enter a course and title, check the readable system/microphone sele
 and click **Start recording**. Disable the microphone if you only need class audio.
 Refresh devices after plugging in a headset. The default selection follows the current
 Windows default; recording uses the devices selected at start.
+You can also paste a **YouTube video URL** on Home, click **Inspect video** to preview the
+title, channel, and duration (automatically filling blank title/course fields), and click
+**Import YouTube audio** to download audio into a local session (`system.wav`) and optionally
+auto-transcribe it.
 
 The recording screen displays elapsed time and separate audio meters. **Stop recording**
 finishes the audio files before offering transcription. Enable automatic transcription
 on Home to start Whisper after that finalization. Closing during recording asks whether
 to stop and save first; it never kills the recording worker.
 
-**Classes** lists sessions newest first. Open a class to inspect all transcription runs
+**Classes** lists sessions newest first, showing whether each session came from a local
+recording or a YouTube import. Open a class to inspect all transcription runs
 or transcribe again with another model/device. Each run is preserved. The built-in viewer
-reads structured JSON, distinguishing **CLASS** (system audio) and **ME** (microphone).
+reads structured JSON, distinguishing **CLASS** (system/YouTube audio) and **ME** (microphone).
 You can also open the Markdown transcript or its folder in your default applications.
 
 **Settings** provides dark/light/system themes, devices, model, processing device, language,
@@ -62,9 +73,10 @@ tests actually run and remaining manual acceptance work.
 ```text
 Meeting / Windows playback ─> WASAPI loopback ─> bounded queue ─> system WAV parts
 Selected microphone       ─> WASAPI input    ─> bounded queue ─> microphone WAV parts
+YouTube video URL         ─> yt-dlp audio    ─> PyAV PCM16    ─> system WAV parts
                               common monotonic recording timeline
                                          |
-                              stop, drain, finalize audio
+                              stop/import, drain, finalize audio
                                          |
                               load faster-whisper model
                                          |
@@ -73,9 +85,9 @@ Selected microphone       ─> WASAPI input    ─> bounded queue ─> microphon
                               partial JSONL ─> final JSON + Markdown
 ```
 
-Whisper and CTranslate2 are lazily imported. `record --transcribe` closes both streams,
-drains both queues, finalizes all WAV files, persists `recorded`, and terminates the audio
-backend before importing the transcription service. No model runs during capture.
+Whisper and CTranslate2 are lazily imported. `record --transcribe` and `youtube --transcribe`
+finalize all WAV files and persist `recorded` before importing the transcription service.
+No model runs during capture or download.
 
 | Component | Responsibility |
 | --- | --- |
@@ -84,6 +96,8 @@ backend before importing the transcription service. No model runs during capture
 | `classscribe/audio/wasapi.py` | Isolated PyAudioWPatch adapter and timestamp conversion |
 | `classscribe/audio/writer.py` | Bounded queues, PCM16 WAV writing, silence gaps, rotation |
 | `classscribe/audio/recorder.py` | Start/stop lifecycle, Ctrl+C, cleanup, metadata checkpoints |
+| `classscribe/youtube.py` | YouTube URL validation, `yt-dlp` metadata/audio download, PCM16 WAV storage |
+| `classscribe/application/youtube.py` | Shared YouTube inspection and session import service |
 | `classscribe/sessions/` | Unique identities, safe directories, status transitions |
 | `classscribe/transcription/` | Lazy engine, CUDA, audio windows, runs, structured outputs |
 | `classscribe/config.py`, `storage.py` | Validated TOML, atomic JSON, operation locks |
@@ -93,7 +107,8 @@ The design was informed by inspection of the reference repository's
 [runtime setup](https://github.com/luismariofg132/Youtube_Transcrip/blob/main/runtime.py)
 and [transcription code](https://github.com/luismariofg132/Youtube_Transcrip/blob/main/transcribe.py).
 The new implementation retains lazy model loading, process-local Windows DLL discovery,
-explicit device selection, model caching, and partial recovery, without YouTube dependencies.
+explicit device selection, model caching, and partial recovery, while routing YouTube audio
+imports through the single ClassScribe session and transcription pipeline.
 
 ## Installation
 
@@ -102,7 +117,7 @@ Use 64-bit **Python 3.12** and Windows 10/11 for capture. In a checkout of this 
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -e ".[audio,transcription]"
+.\.venv\Scripts\python.exe -m pip install -e ".[audio,youtube,transcription]"
 .\.venv\Scripts\python.exe -m classscribe --help
 ```
 
@@ -206,6 +221,22 @@ quiet during capture. Microphone capture is enabled by default; use `--no-microp
 if none is available. `--microphone` overrides a disabled config default; supplying
 `--microphone-device` also enables it unless contradictory `--no-microphone` is supplied.
 
+### YouTube import
+
+```powershell
+classscribe youtube "https://www.youtube.com/watch?v=VIDEO_ID" --inspect
+classscribe youtube "https://www.youtube.com/watch?v=VIDEO_ID"
+classscribe youtube "https://www.youtube.com/watch?v=VIDEO_ID" --title "Lecture 4" --course "Operating Systems" --transcribe --device cuda
+```
+
+`youtube --inspect` prints structured JSON metadata (video ID, canonical URL, title, channel,
+and duration) without downloading audio. Without `--inspect`, ClassScribe downloads the best
+audio stream via `yt-dlp`, decodes it to mono 16 kHz PCM16 WAV (`system.wav`) inside a new
+session directory using PyAV, removes the temporary compressed download, and marks the session
+`recorded`. Passing `--transcribe` runs the standard ClassScribe transcription pipeline
+immediately after the local session audio is finalized. Re-transcribing a YouTube session
+later (`classscribe transcribe SESSION_ID`) reuses the local `system.wav` without re-downloading.
+
 ### Transcription and combined workflow
 
 ```powershell
@@ -214,10 +245,10 @@ classscribe transcribe SESSION_ID --model medium --device cpu --offline
 classscribe record --title "Clase" --course "Arquitectura" --transcribe --device cuda
 ```
 
-Use the **full session ID** printed at recording startup, or the exact session directory
-name. Lookup uses `recordings/`; override with `--recordings-dir`. Every transcription
-creates a fresh run, including retries with the same model. Original audio and all earlier
-outputs remain intact. `--language auto` detects language per audio window; detected
+Use the **full session ID** printed at recording startup or YouTube import, or the exact
+session directory name. Lookup uses `recordings/`; override with `--recordings-dir`. Every
+transcription creates a fresh run, including retries with the same model. Original audio and
+all earlier outputs remain intact. `--language auto` detects language per audio window; detected
 languages are recorded per segment and in the final result.
 
 ## Configuration

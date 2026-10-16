@@ -29,6 +29,7 @@ class SessionLibrary:
 
     def summary(self, directory: Path, data: dict[str, Any]) -> dict[str, Any]:
         runs = self.runs(data["session_id"])
+        youtube = data.get("youtube") or {}
         return {
             "identity": data["session_id"],
             "title": data["title"],
@@ -41,6 +42,10 @@ class SessionLibrary:
             "directory": str(directory.resolve()),
             "microphone": data["microphone_audio_file"] is not None,
             "system_audio": (directory / data["system_audio_file"]).is_file(),
+            "source_kind": data.get("source_kind") or "recording",
+            "source_url": data.get("source_url") or "",
+            "channel": youtube.get("channel") or "",
+            "video_id": youtube.get("video_id") or "",
         }
 
     def detail(self, identity: str) -> dict[str, Any]:

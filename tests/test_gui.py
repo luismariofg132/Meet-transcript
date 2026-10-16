@@ -58,8 +58,10 @@ class FakeServices:
         self.transcription_entered = threading.Event()
         self.allow_finalization = threading.Event()
         self.allow_transcription = threading.Event()
+        self.allow_youtube = threading.Event()
         self.record_thread = None
         self.transcribe_thread = None
+        self.youtube_thread = None
         self.finalized = False
         self.fail = False
         self.detail = {
@@ -73,6 +75,10 @@ class FakeServices:
                 "status": "recorded",
                 "microphone": False,
                 "system_audio": True,
+                "source_kind": "recording",
+                "source_url": "",
+                "channel": "",
+                "video_id": "",
                 "directory": str(path),
             },
             "runs": [],
@@ -101,6 +107,38 @@ class FakeServices:
         self.finalized = True
         return self.detail
 
+    def inspect_youtube(self, values, url):
+        self.youtube_thread = QThread.currentThread()
+        return {
+            "video_id": "dQw4w9WgXcQ",
+            "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "title": "Operating Systems Lecture",
+            "channel": "CS Department",
+            "duration_seconds": 120,
+            "duration": "00:02:00",
+        }
+
+    def import_youtube(self, values, url, title, course, emit):
+        from classscribe.youtube import YouTubeImportProgress
+
+        self.youtube_thread = QThread.currentThread()
+        emit(
+            "youtube",
+            YouTubeImportProgress("downloading", 500, 1000, title or "Operating Systems Lecture"),
+        )
+        assert self.allow_youtube.wait(5)
+        self.finalized = True
+        yt_session = {
+            **self.detail["session"],
+            "title": title or "Operating Systems Lecture",
+            "course": course or "CS Department",
+            "source_kind": "youtube",
+            "source_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "channel": "CS Department",
+            "video_id": "dQw4w9WgXcQ",
+        }
+        return {"session": yt_session, "runs": [], "sessions": [yt_session]}
+
     def transcribe(self, values, identity, emit):
         assert self.finalized
         self.transcribe_thread = QThread.currentThread()
@@ -123,6 +161,7 @@ def desktop(qt, tmp_path):
     controller.stop_event.set()
     services.allow_finalization.set()
     services.allow_transcription.set()
+    services.allow_youtube.set()
     spin(qt, lambda: controller.job is None)
     delete(controller)
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
@@ -357,3 +396,34 @@ assert engine.rootObjects()
 delete(engine)
 """
     subprocess.run([sys.executable, "-c", script], check=True, timeout=30)
+
+
+def test_youtube_inspect_and_import_with_auto_transcribe(qt, desktop):
+    c, s = desktop
+    inspected = []
+    imported = []
+    c.youtubeInspected.connect(inspected.append)
+    c.youtubeImported.connect(imported.append)
+
+    c.inspectYoutube("  ")
+    assert "Enter a YouTube video URL" in c.state["error"]
+
+    c.inspectYoutube("https://youtu.be/dQw4w9WgXcQ")
+    spin(qt, lambda: c.job is None)
+    assert s.youtube_thread != qt.thread()
+    assert len(inspected) == 1
+    assert c.state["youtube"]["title"] == "Operating Systems Lecture"
+    assert c.state["youtube"]["channel"] == "CS Department"
+
+    c.setPreference("auto_transcribe", True)
+    c.importYoutube("https://youtu.be/dQw4w9WgXcQ", "Processes & Threads", "OS 101")
+    spin(qt, lambda: c.state["progress"] == 0.5 and c.state["page"] == "transcribing")
+    assert c.state["stage"] == "Downloading YouTube audio"
+    s.allow_youtube.set()
+    spin(qt, s.transcription_entered.is_set)
+    assert s.finalized and imported == ["test"]
+    assert c.state["selected"]["source_kind"] == "youtube"
+    assert c.state["selected"]["title"] == "Processes & Threads"
+    s.allow_transcription.set()
+    spin(qt, lambda: c.job is None)
+    assert c.state["page"] == "completed"

@@ -9,13 +9,20 @@ from classscribe.application.library import SessionLibrary
 from classscribe.application.preferences import PreferenceStore
 from classscribe.application.recording import RecordingService
 from classscribe.application.transcription import transcribe
+from classscribe.application.youtube import YouTubeService
 from classscribe.config import load_settings
 
 
 class DesktopServices:
-    def __init__(self, store: PreferenceStore, recording: RecordingService | None = None) -> None:
+    def __init__(
+        self,
+        store: PreferenceStore,
+        recording: RecordingService | None = None,
+        youtube: YouTubeService | None = None,
+    ) -> None:
         self.store = store
         self.recording = recording or RecordingService()
+        self.youtube = youtube or YouTubeService()
 
     def discover(self) -> dict[str, Any]:
         try:
@@ -33,6 +40,40 @@ class DesktopServices:
 
     def library(self, values: dict[str, Any]) -> SessionLibrary:
         return SessionLibrary(load_settings(None, values))
+
+    def inspect_youtube(self, values: dict[str, Any], url: str) -> dict[str, Any]:
+        return self.youtube.inspect_dict(load_settings(None, values), url)
+
+    def import_youtube(
+        self,
+        values: dict[str, Any],
+        url: str,
+        title: str,
+        course: str,
+        emit: Callable[[str, Any], None],
+    ) -> dict[str, Any]:
+        result = self.youtube.import_session(
+            load_settings(None, values),
+            url,
+            title,
+            course,
+            prepared=lambda path, session, meta: emit(
+                "prepared",
+                {
+                    "identity": session.session_id,
+                    "directory": str(path.resolve()),
+                    "title": session.title,
+                    "course": session.course,
+                    "microphone": False,
+                    "source_kind": "youtube",
+                    "source_url": meta.url,
+                    "channel": meta.channel,
+                    "video_id": meta.video_id,
+                },
+            ),
+            progress=lambda value: emit("youtube", value),
+        )
+        return self.library(values).detail(result.session.session_id)
 
     def record(
         self,

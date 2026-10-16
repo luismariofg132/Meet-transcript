@@ -12,7 +12,9 @@ ColumnLayout {
         font.letterSpacing: 2
     }
     AppText {
-        text: transcript ? "Transcription completed" : "Recording saved"
+        text: transcript ? "Transcription completed"
+                         : (appController.state.selected.source_kind === "youtube"
+                            ? "YouTube audio saved" : "Recording saved")
         font.pixelSize: 34
         font.weight: Font.DemiBold
         Layout.fillWidth: true
@@ -43,8 +45,12 @@ ColumnLayout {
                 color: Theme.muted
             }
             AppText {
-                text: "Class audio · Saved     /     My microphone · " + (
-                          appController.state.selected.microphone ? "Saved" : "Disabled")
+                text: appController.state.selected.source_kind === "youtube"
+                      ? ("YouTube audio · Saved"
+                         + (appController.state.selected.channel
+                            ? "     /     Channel · " + appController.state.selected.channel : ""))
+                      : ("Class audio · Saved     /     My microphone · " + (
+                             appController.state.selected.microphone ? "Saved" : "Disabled"))
                 color: Theme.success
             }
             AppButton {

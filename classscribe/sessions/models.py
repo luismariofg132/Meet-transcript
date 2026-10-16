@@ -46,6 +46,9 @@ class Session:
     recording_finalized: bool = False
     error: str | None = None
     transcription_runs: list[str] = field(default_factory=list)
+    source_kind: str = "recording"
+    source_url: str | None = None
+    youtube: dict[str, Any] | None = None
 
     def transition(self, target: Status) -> None:
         if target not in TRANSITIONS[self.status]:
@@ -63,5 +66,7 @@ class Session:
         identity = data.get("session_id", "")
         if not isinstance(identity, str) or UUID(identity).hex != identity:
             raise ValueError("Invalid session identity; expected a canonical UUID hex string")
+        if data.get("source_kind", "recording") not in {"recording", "youtube"}:
+            raise ValueError("Unsupported session source kind")
         data["status"] = Status(data["status"])
         return cls(**data)

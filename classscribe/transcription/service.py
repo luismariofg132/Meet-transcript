@@ -169,6 +169,10 @@ def transcribe_session(
                 "chunking": report["chunking"],
                 "segments": [segment.to_dict() for segment in merge_segments(segments)],
             }
+            if session.source_kind == "youtube":
+                transcript["source_kind"] = "youtube"
+                transcript["source_url"] = session.source_url
+                transcript["youtube"] = session.youtube
             # A directory rename publishes the two artifacts together. Before this
             # point only partial files exist; consumers use result/ as the commit marker.
             report["stage"] = "publishing_artifacts"

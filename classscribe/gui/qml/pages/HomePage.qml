@@ -7,6 +7,15 @@ ScrollView {
     id: page
     contentWidth: availableWidth
     clip: true
+    Connections {
+        target: appController
+        function onYoutubeInspected() {
+            if (!title.text.trim() && appController.state.youtube.title)
+                title.text = appController.state.youtube.title;
+            if (!course.text.trim() && appController.state.youtube.channel)
+                course.text = appController.state.youtube.channel;
+        }
+    }
     ColumnLayout {
         width: page.availableWidth
         spacing: 24
@@ -48,6 +57,7 @@ ScrollView {
                         }
                         AppField {
                             id: course
+                            objectName: "courseField"
                             Layout.fillWidth: true
                             placeholderText: "e.g. Computer Architecture"
                             Accessible.name: "Course"
@@ -61,6 +71,7 @@ ScrollView {
                         }
                         AppField {
                             id: title
+                            objectName: "titleField"
                             Layout.fillWidth: true
                             placeholderText: "e.g. Memory and cache"
                             Accessible.name: "Class title"
@@ -105,7 +116,7 @@ ScrollView {
                     Layout.fillWidth: true
                 }
                 AppSwitch {
-                    text: "Transcribe automatically after recording"
+                    text: "Transcribe automatically after recording or import"
                     checked: appController.preferences.auto_transcribe
                     onToggled: appController.setPreference("auto_transcribe", checked)
                 }
@@ -115,6 +126,74 @@ ScrollView {
                     symbol: "record"
                     text: "Start recording"
                     onClicked: appController.startRecording(title.text, course.text)
+                }
+                Rectangle {
+                    Layout.fillWidth: true
+                    height: 1
+                    color: Theme.border
+                }
+                AppText {
+                    text: "Import from YouTube"
+                    font.pixelSize: 18
+                    font.weight: Font.DemiBold
+                }
+                AppText {
+                    text: "Paste a YouTube video URL to inspect metadata, download audio locally and transcribe with the same ClassScribe pipeline."
+                    color: Theme.muted
+                    font.pixelSize: Theme.small
+                    Layout.fillWidth: true
+                }
+                RowLayout {
+                    spacing: 12
+                    AppField {
+                        id: youtubeUrl
+                        objectName: "youtubeUrlField"
+                        Layout.fillWidth: true
+                        placeholderText: "https://www.youtube.com/watch?v=..."
+                        Accessible.name: "YouTube video URL"
+                        onAccepted: appController.importYoutube(text, title.text, course.text)
+                    }
+                    AppButton {
+                        objectName: "inspectYoutubeButton"
+                        text: "Inspect video"
+                        symbol: "youtube"
+                        onClicked: appController.inspectYoutube(youtubeUrl.text)
+                    }
+                }
+                Rectangle {
+                    Layout.fillWidth: true
+                    implicitHeight: metaBox.implicitHeight + 24
+                    radius: 8
+                    color: Theme.raised
+                    visible: !!appController.state.youtube.title
+                    ColumnLayout {
+                        id: metaBox
+                        anchors {
+                            left: parent.left
+                            right: parent.right
+                            top: parent.top
+                            margins: 12
+                        }
+                        spacing: 4
+                        AppText {
+                            text: appController.state.youtube.title || ""
+                            font.weight: Font.DemiBold
+                            Layout.fillWidth: true
+                        }
+                        AppText {
+                            text: (appController.state.youtube.channel || "YouTube") + "  ·  "
+                                  + (appController.state.youtube.duration || "00:00:00")
+                            color: Theme.muted
+                            font.pixelSize: Theme.small
+                        }
+                    }
+                }
+                AppButton {
+                    objectName: "importYoutubeButton"
+                    Layout.fillWidth: true
+                    symbol: "youtube"
+                    text: "Import YouTube audio"
+                    onClicked: appController.importYoutube(youtubeUrl.text, title.text, course.text)
                 }
             }
         }

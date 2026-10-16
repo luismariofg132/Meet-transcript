@@ -48,13 +48,22 @@ def markdown(transcript: dict[str, Any]) -> str:
         f"Duration: {timestamp(transcript['duration_seconds'])}",
         f"Model: {transcript['model']}",
         f"Device: {transcript['device']} ({transcript['compute_type']})",
-        "",
-        "Automatic transcript; timestamps and recognition may be imperfect.",
-        "CLASE = all system playback. YO = microphone; these are sources, not speaker identities.",
-        "",
-        "### Transcript",
-        "",
     ]
+    if transcript.get("source_url"):
+        lines.append(f"Source: {transcript['source_url']}")
+    lines.extend(
+        [
+            "",
+            "Automatic transcript; timestamps and recognition may be imperfect.",
+            (
+                "CLASE = all system playback. YO = microphone; "
+                "these are sources, not speaker identities."
+            ),
+            "",
+            "### Transcript",
+            "",
+        ]
+    )
     for segment in transcript["segments"]:
         label = "CLASE" if segment["source"] == "system" else "YO"
         lines.extend([f"[{timestamp(segment['start'])}] {label}", segment["text"], ""])

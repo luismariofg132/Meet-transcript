@@ -21,6 +21,8 @@ class AppController(QObject):
     recordingStopping = Signal()
     recordingCompleted = Signal(str)
     recordingFailed = Signal(str)
+    youtubeInspected = Signal(str)
+    youtubeImported = Signal(str)
 
     def __init__(self, services: DesktopServices) -> None:
         super().__init__()
@@ -38,6 +40,7 @@ class AppController(QObject):
             stopping=False,
             recordingActive=False,
             selected={},
+            youtube={},
             stage="",
             progress=-1.0,
             processed="",
@@ -49,7 +52,19 @@ class AppController(QObject):
         self.outputs = RowsModel(("name", "label", "is_default"), self)
         self.microphones = RowsModel(("name", "label", "is_default"), self)
         self.sessions = RowsModel(
-            ("identity", "title", "course", "date", "duration", "status", "transcribed"), self
+            (
+                "identity",
+                "title",
+                "course",
+                "date",
+                "duration",
+                "status",
+                "transcribed",
+                "source_kind",
+                "source_url",
+                "channel",
+            ),
+            self,
         )
         self.runs = RowsModel(
             ("identity", "model", "device", "date", "status", "ready", "directory"), self
@@ -185,6 +200,49 @@ class AppController(QObject):
             ),
         )
 
+    @Slot(str)
+    def inspectYoutube(self, url: str) -> None:
+        if self.job:
+            return
+        if not url.strip():
+            self.update(error="Enter a YouTube video URL to inspect.")
+            return
+        values = dict(self._prefs)
+        self.launch(
+            "inspect_youtube",
+            lambda emit: self.services.inspect_youtube(values, url.strip()),
+        )
+
+    @Slot(str, str, str)
+    def importYoutube(self, url: str, title: str = "", course: str = "") -> None:
+        if self.job:
+            return
+        if not url.strip():
+            self.update(error="Enter a YouTube video URL before importing.")
+            return
+        values = dict(self._prefs)
+        self.update(
+            page="transcribing",
+            stage="Inspecting YouTube metadata",
+            progress=-1.0,
+            processed="",
+            actualDevice="",
+            result="",
+            selected={
+                "title": title.strip() or self._state["youtube"].get("title", "YouTube video"),
+                "course": course.strip() or self._state["youtube"].get("channel", ""),
+                "microphone": False,
+                "source_kind": "youtube",
+                "source_url": url.strip(),
+            },
+        )
+        self.launch(
+            "import_youtube",
+            lambda emit: self.services.import_youtube(
+                values, url.strip(), title.strip(), course.strip(), emit
+            ),
+        )
+
     @Slot()
     def stopRecording(self) -> None:
         if self.job and self._state["operation"] == "record":
@@ -253,6 +311,26 @@ class AppController(QObject):
             self.update(elapsed=timestamp(value))
         elif name == "levels":
             self.update(systemLevel=value[0], microphoneLevel=value[1])
+        elif name == "youtube":
+            labels = {
+                "inspecting": "Inspecting YouTube metadata",
+                "downloading": "Downloading YouTube audio",
+                "preparing_audio": "Preparing session audio",
+                "completed": "Audio imported",
+            }
+            processed = ""
+            if value.stage == "downloading" and value.total_bytes > 0:
+                done_mb = value.downloaded_bytes / (1024 * 1024)
+                total_mb = value.total_bytes / (1024 * 1024)
+                processed = f"{done_mb:.1f} MB / {total_mb:.1f} MB"
+            elif value.downloaded_bytes > 0:
+                done_mb = value.downloaded_bytes / (1024 * 1024)
+                processed = f"{done_mb:.1f} MB"
+            self.update(
+                stage=labels.get(value.stage, value.stage),
+                progress=value.progress if value.progress is not None else -1.0,
+                processed=processed,
+            )
         elif name == "transcription":
             labels = {
                 "loading_model": "Loading Whisper model",
@@ -282,7 +360,10 @@ class AppController(QObject):
         job.deleteLater()
         self.update(busy=False, operation="", systemLevel=0.0, microphoneLevel=0.0)
         if error:
-            self.update(error=error, page="home" if kind == "record" else self._state["page"])
+            self.update(
+                error=error,
+                page="home" if kind in {"record", "import_youtube"} else self._state["page"],
+            )
             if kind == "record":
                 self.recordingFailed.emit(error)
         elif kind == "initialize":
@@ -296,16 +377,27 @@ class AppController(QObject):
             self.update(notice="Settings saved.")
         elif kind == "library":
             self.sessions.replace(result)
-        elif kind in {"record", "detail", "transcribe"}:
+        elif kind == "inspect_youtube":
+            self.update(youtube=result, notice=f"YouTube metadata ready: {result['title']}")
+            self.youtubeInspected.emit(result["video_id"])
+        elif kind in {"record", "import_youtube", "detail", "transcribe"}:
             self.runs.replace(result["runs"])
             self.update(
                 selected=result["session"],
-                page={"record": "saved", "detail": "detail", "transcribe": "completed"}[kind],
+                page={
+                    "record": "saved",
+                    "import_youtube": "saved",
+                    "detail": "detail",
+                    "transcribe": "completed",
+                }[kind],
             )
             if kind == "transcribe":
                 self.update(result=result["result"])
-            if kind == "record":
-                self.recordingCompleted.emit(result["session"]["identity"])
+            if kind in {"record", "import_youtube"}:
+                if kind == "record":
+                    self.recordingCompleted.emit(result["session"]["identity"])
+                else:
+                    self.youtubeImported.emit(result["session"]["identity"])
                 if self._prefs["auto_transcribe"] and not self.close_pending:
                     self.transcribe()
         elif kind == "viewer":
@@ -321,6 +413,7 @@ class AppController(QObject):
                         ("Audio backend", "audio_backend"),
                         ("System audio", "default_output"),
                         ("Microphone", "default_microphone"),
+                        ("YouTube import", "yt-dlp"),
                         ("NVIDIA GPU", "nvidia"),
                         ("CTranslate2", "ctranslate2_import"),
                         ("Whisper model", "model_cache"),

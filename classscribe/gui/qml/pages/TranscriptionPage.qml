@@ -12,7 +12,8 @@ ColumnLayout {
         font.letterSpacing: 2
     }
     AppText {
-        text: "Transcribing class"
+        text: appController.state.operation === "import_youtube" ? "Importing YouTube audio"
+                                                                 : "Transcribing class"
         font.pixelSize: 34
         font.weight: Font.DemiBold
     }
@@ -91,7 +92,9 @@ ColumnLayout {
                 }
             }
             AppText {
-                text: "Processed audio   " + appController.state.processed
+                text: (appController.state.operation === "import_youtube" ? "Downloaded audio   "
+                                                                          : "Processed audio   ")
+                      + appController.state.processed
                 color: Theme.muted
             }
             RowLayout {

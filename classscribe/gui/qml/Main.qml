@@ -143,7 +143,7 @@ ApplicationWindow {
                 }
             }
             AppText {
-                visible: appController.state.busy && !["record", "transcribe"].includes(
+                visible: appController.state.busy && !["record", "transcribe", "import_youtube"].includes(
                              appController.state.operation)
                 text: "Working…"
                 color: Theme.muted

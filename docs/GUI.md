@@ -11,16 +11,18 @@ CLI commands ──────────────────────�
 ```
 
 `application/recording.py` owns device selection, session creation and backend lifetime;
-both presentations use it. `application/transcription.py` is the shared lazy transcription
-entry. `library.py` discovers session/run metadata and reads structured transcript JSON.
-`preferences.py` validates and atomically persists desktop preferences. `desktop.py`
-composes these operations for the GUI. None imports Qt.
+both presentations use it. `application/youtube.py` owns YouTube URL metadata inspection
+and audio-only session import (`system.wav` creation) shared by CLI and GUI.
+`application/transcription.py` is the shared lazy transcription entry. `library.py`
+discovers session/run metadata (including YouTube source metadata) and reads structured
+transcript JSON. `preferences.py` validates and atomically persists desktop preferences.
+`desktop.py` composes these operations for the GUI. None imports Qt.
 
 `gui/controller.py` serializes work and owns presentation state. `gui/workers.py` runs
 the operation in QThread; queued signals deliver progress to the main thread. The
 controller's completion slot is invoked only after QThread emits `finished`. No worker
 mutates Qt models. Device discovery, preference I/O, library scanning, transcript reads,
-diagnostics, recording and transcription all run outside the UI thread.
+diagnostics, recording, YouTube inspection/import and transcription all run outside the UI thread.
 
 The QML boundary uses explicit-role QAbstractListModels for devices, classes, runs,
 transcript segments and diagnostic rows. Only small state/preference maps cross as
@@ -35,13 +37,13 @@ window is 1000×650; long forms scroll. The sidebar contains Home, Classes and S
 
 ## Pages
 
-* Home: course/title, devices, mic toggle, auto-transcription, model/device and Record.
+* Home: course/title, YouTube URL inspect/import card, devices, mic toggle, auto-transcription, model/device and Record.
 * Recording: elapsed time, system/mic meters, startup/saving states and Stop.
-* Recording saved: duration, audio status, transcribe and recording folder.
-* Transcribing: stages, processed audio, actual engine device and progress.
+* Recording saved: duration, audio status (or YouTube source), transcribe and recording folder.
+* Transcribing: stages (including YouTube download/conversion stages), processed audio/bytes, actual engine device and progress.
 * Transcription completed: open Markdown, open folder, view transcript and classes.
-* Classes: date-sorted session cards with recording/transcription status.
-* Session detail: metadata, audio availability, all runs and transcribe again.
+* Classes: date-sorted session cards with recording/YouTube source badge and transcription status.
+* Session detail: metadata (including YouTube channel/URL when applicable), audio availability, all runs and transcribe again.
 * Transcript: virtualized chronological timestamp/CLASS/ME entries from JSON.
 * Settings: themes, devices, transcription, storage and manual diagnostics.
 

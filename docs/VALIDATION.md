@@ -1,5 +1,15 @@
 # Implementation validation
 
+## YouTube import source integration (2026-10-15)
+
+Added YouTube audio import (`classscribe/youtube.py`, `classscribe/application/youtube.py`, CLI `youtube` subcommand, and PySide6/QML GUI integration) reusing the existing ClassScribe session format (`system.wav`, `session.json`), overlapping-window transcription pipeline (`transcribe_session`), and `SessionLibrary`.
+
+| Command | Result |
+| --- | --- |
+| `.venv\Scripts\python.exe -m pytest -q --basetemp .tools\pytest-yt-final` | **186 passed** (31 new offline YouTube & GUI cases) |
+| `.venv\Scripts\python.exe -m ruff check .` | **All checks passed** |
+| `.venv\Scripts\python.exe -m ruff format --check .` | **57 files already formatted** |
+
 ## Overlapping-window change (2026-10-15)
 
 Baseline: **91 tests passed** before any changes. After the change, **130 tests passed**

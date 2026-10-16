@@ -23,10 +23,17 @@ ColumnLayout {
     }
     RowLayout {
         AppText {
-            text: "Class audio: " + (appController.state.selected.system_audio ? "Saved" :
-                                                                                 "Unavailable")
-                  + "   /   My microphone: " + (appController.state.selected.microphone ? "Enabled" :
-                                                                                          "Disabled")
+            text: appController.state.selected.source_kind === "youtube"
+                  ? ("YouTube audio: "
+                     + (appController.state.selected.system_audio ? "Saved" : "Unavailable")
+                     + (appController.state.selected.channel
+                        ? "   /   Channel: " + appController.state.selected.channel : "")
+                     + (appController.state.selected.source_url
+                        ? "   /   " + appController.state.selected.source_url : ""))
+                  : ("Class audio: "
+                     + (appController.state.selected.system_audio ? "Saved" : "Unavailable")
+                     + "   /   My microphone: "
+                     + (appController.state.selected.microphone ? "Enabled" : "Disabled"))
             Layout.fillWidth: true
             color: Theme.muted
         }

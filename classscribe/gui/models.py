@@ -20,7 +20,11 @@ class RowsModel(QAbstractListModel):
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid() or not 0 <= index.row() < len(self.rows):
             return None
-        return self.rows[index.row()].get(self.roles.get(role, ""))
+        name = self.roles.get(role, "")
+        value = self.rows[index.row()].get(name)
+        if value is None and name in {"source_kind", "source_url", "channel", "video_id"}:
+            return ""
+        return value
 
     def replace(self, rows: list[dict[str, Any]]) -> None:
         self.beginResetModel()

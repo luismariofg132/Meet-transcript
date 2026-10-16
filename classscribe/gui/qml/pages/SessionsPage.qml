@@ -39,6 +39,8 @@ ColumnLayout {
             required property string duration
             required property string status
             required property bool transcribed
+            required property string source_kind
+            required property string channel
             width: list.width - 12
             height: 132
             RowLayout {
@@ -48,7 +50,8 @@ ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 8
                     AppText {
-                        text: course || "Uncategorized"
+                        text: (course || channel || "Uncategorized")
+                              + (source_kind === "youtube" ? "  ·  YouTube" : "")
                         color: Theme.muted
                         font.pixelSize: Theme.small
                     }
@@ -67,7 +70,8 @@ ColumnLayout {
                     }
                 }
                 AppText {
-                    text: transcribed ? "Transcribed" : "Recording"
+                    text: transcribed ? "Transcribed"
+                                      : (source_kind === "youtube" ? "YouTube audio" : "Recording")
                     color: transcribed ? Theme.success : Theme.muted
                 }
                 AppButton {

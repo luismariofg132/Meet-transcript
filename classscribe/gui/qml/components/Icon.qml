@@ -68,6 +68,12 @@ Canvas {
             c.arc(10, 10, 7, 0, Math.PI * 2);
             c.moveTo(13, 10);
             c.arc(10, 10, 3, 0, Math.PI * 2);
+        } else if (name === "youtube") {
+            c.roundedRect(2, 4, 16, 12, 3, 3);
+            c.moveTo(8, 7.5);
+            c.lineTo(13, 10);
+            c.lineTo(8, 12.5);
+            c.closePath();
         } else {
             c.rect(4, 2, 12, 16);
             c.moveTo(7, 7);

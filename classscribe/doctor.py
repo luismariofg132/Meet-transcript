@@ -29,7 +29,7 @@ def diagnose(
         "nvidia": query_nvidia(),
         "cuda_inference": "not tested",
     }
-    for package in ("PyAudioWPatch", "faster-whisper", "ctranslate2"):
+    for package in ("PyAudioWPatch", "faster-whisper", "ctranslate2", "yt-dlp"):
         try:
             report[package] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:

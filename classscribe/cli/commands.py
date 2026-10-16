@@ -8,6 +8,7 @@ from pathlib import Path
 from classscribe import __version__
 from classscribe.application.recording import RecordingService
 from classscribe.application.transcription import transcribe
+from classscribe.application.youtube import YouTubeService
 from classscribe.audio.devices import Device
 from classscribe.audio.recorder import record_session
 from classscribe.audio.wasapi import WasapiBackend
@@ -15,6 +16,7 @@ from classscribe.config import DEVICES, MODELS, Settings, load_settings
 from classscribe.sessions.manager import SessionManager
 from classscribe.sessions.models import Session
 from classscribe.storage import timestamp
+from classscribe.youtube import YouTubeMetadata, YtDlpClient, import_youtube_session
 
 
 def positive_seconds(value: str) -> float:
@@ -48,11 +50,27 @@ def parser() -> argparse.ArgumentParser:
     record.add_argument("--microphone", action=argparse.BooleanOptionalAction, default=None)
     record.add_argument("--transcribe", action="store_true")
     record.add_argument("--duration", type=positive_seconds, help="Stop after this many seconds")
+    youtube = commands.add_parser(
+        "youtube", help="Import audio from a YouTube video URL into a local session"
+    )
+    youtube.add_argument("url", help="YouTube video URL")
+    youtube.add_argument(
+        "--title", default="", help="Override session title (default: video title)"
+    )
+    youtube.add_argument("--course", default="", help="Course name (default: channel/uploader)")
+    youtube.add_argument(
+        "--inspect",
+        action="store_true",
+        help="Inspect and print video metadata without downloading",
+    )
+    youtube.add_argument(
+        "--transcribe", action="store_true", help="Transcribe after importing audio"
+    )
     transcribe = commands.add_parser(
         "transcribe", help="Create a new transcription run for a session"
     )
     transcribe.add_argument("session_id", help="Full session ID or exact session directory name")
-    for command in (record, transcribe, doctor):
+    for command in (record, youtube, transcribe, doctor):
         command.add_argument("--device", choices=DEVICES, default=None)
         command.add_argument("--model", choices=MODELS, default=None)
         command.add_argument("--language", default=None, help="Language code (default es), or auto")
@@ -121,6 +139,33 @@ def run_record(args: argparse.Namespace, settings: Settings) -> None:
         print(f"Transcript: {output}")
 
 
+def run_youtube(args: argparse.Namespace, settings: Settings) -> None:
+    service = YouTubeService(client_factory=YtDlpClient, importer=import_youtube_session)
+    if args.inspect:
+        info = service.inspect_dict(settings, args.url)
+        print(json.dumps(info, indent=2, ensure_ascii=False))
+        return
+
+    def prepared(directory: Path, session: Session, metadata: YouTubeMetadata) -> None:
+        print(f"ClassScribe YouTube Import\n\nCourse: {session.course}\nTitle: {session.title}")
+        print(f"Source: {metadata.url}")
+        if metadata.channel:
+            print(f"Channel: {metadata.channel}")
+        print(f"Session: {session.session_id}\nDirectory: {directory}", flush=True)
+
+    result = service.import_session(
+        settings,
+        args.url,
+        args.title,
+        args.course,
+        prepared=prepared,
+    )
+    print(f"YouTube audio saved: {result.directory}")
+    if args.transcribe:
+        output = transcribe(settings, result.directory, result.session)
+        print(f"Transcript: {output}")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -131,6 +176,8 @@ def main(argv: list[str] | None = None) -> int:
             list_devices()
         elif args.command == "record":
             run_record(args, settings)
+        elif args.command == "youtube":
+            run_youtube(args, settings)
         elif args.command == "transcribe":
             manager = SessionManager(settings.recordings_dir)
             directory, session = manager.find(args.session_id)
