@@ -195,3 +195,37 @@ def test_pyproject_cuda_extra_includes_windows_cudnn():
     assert any(
         dep.startswith("nvidia-cudnn-cu12") and "sys_platform" not in dep for dep in cuda_deps
     )
+
+
+def test_configure_cuda_libraries_packaged_app_fallback(monkeypatch, tmp_path):
+    from classscribe.transcription import runtime
+
+    app_root = tmp_path / "ClassScribe"
+    cublas_dir = app_root / "nvidia" / "cublas" / "bin"
+    cublas_dir.mkdir(parents=True)
+    (cublas_dir / "cublas64_12.dll").write_bytes(b"")
+
+    ct2_dir = app_root / "ctranslate2"
+    ct2_dir.mkdir(parents=True)
+    (ct2_dir / "ctranslate2.dll").write_bytes(b"")
+
+    handles = []
+
+    def register(path):
+        handle = object()
+        handles.append(handle)
+        return handle
+
+    fake_os = SimpleNamespace(
+        name="nt", pathsep=";", environ={"PATH": "existing"}, add_dll_directory=register
+    )
+    monkeypatch.setattr(runtime, "os", fake_os)
+    monkeypatch.setattr(runtime, "_registered", set())
+    monkeypatch.setattr(runtime, "_dll_handles", [])
+    monkeypatch.setattr(runtime.importlib.util, "find_spec", lambda pkg: None)
+    monkeypatch.setattr(runtime.sys, "executable", str(app_root / "ClassScribe.exe"))
+
+    runtime.configure_cuda_libraries()
+    assert len(handles) == 2
+    assert str(cublas_dir) in fake_os.environ["PATH"]
+    assert str(ct2_dir) in fake_os.environ["PATH"]

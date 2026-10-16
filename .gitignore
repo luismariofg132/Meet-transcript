@@ -31,7 +31,8 @@ classscribe.toml
 .coverage
 htmlcov/
 graphify-out/
-pysidedeploy.spec
+/pysidedeploy.spec
+!packaging/pysidedeploy.spec
 deployment/
 *.build/
 *.dist/

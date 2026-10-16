@@ -3,6 +3,7 @@
 import importlib.util
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -16,9 +17,23 @@ def configure_cuda_libraries() -> None:
     roots: list[Path] = []
     for package in ("ctranslate2", "nvidia"):
         spec = importlib.util.find_spec(package)
-        if spec and spec.submodule_search_locations:
-            roots.extend(Path(path) for path in spec.submodule_search_locations)
+        if spec:
+            if spec.submodule_search_locations:
+                roots.extend(Path(path) for path in spec.submodule_search_locations)
+            elif getattr(spec, "origin", None):
+                roots.append(Path(spec.origin).parent)
+    # Packaged application fallback: inspect application root and subdirectories
+    app_root = Path(sys.executable).resolve().parent
+    for sub in ("ctranslate2", "nvidia"):
+        candidate = app_root / sub
+        if candidate.is_dir() and candidate not in roots:
+            roots.append(candidate)
     directories = sorted({dll.parent for root in roots for dll in root.rglob("*.dll")})
+    for dll_pattern in ("cublas*.dll", "cudnn*.dll", "ctranslate2.dll"):
+        if any(app_root.glob(dll_pattern)) and app_root not in directories:
+            directories.append(app_root)
+            directories.sort()
+            break
     # Windows native dependencies may use LoadLibrary, which also consults PATH.
     # Retain add_dll_directory handles for the entire process lifetime.
     for directory in directories:

@@ -128,6 +128,23 @@ def _extract_metadata(video_id: str, url: str, info: Any) -> YouTubeMetadata:
     )
 
 
+def resolve_node_runtime() -> str | None:
+    """Resolve Node.js runtime path relative to packaged app or repository root.
+
+    Falls back to PATH lookup.
+    """
+    exe_name = "node.exe" if os.name == "nt" else "node"
+    app_root = Path(sys.executable).resolve().parent
+    candidate = app_root / "bin" / exe_name
+    if candidate.is_file():
+        return str(candidate.resolve())
+    repo_root = Path(__file__).resolve().parent.parent
+    candidate = repo_root / "bin" / exe_name
+    if candidate.is_file():
+        return str(candidate.resolve())
+    return shutil.which("node")
+
+
 class YtDlpClient:
     def _load_yt_dlp(self) -> Any:
         try:
@@ -137,8 +154,7 @@ class YtDlpClient:
         return YoutubeDL
 
     def _base_options(self) -> dict[str, Any]:
-        bundled_node = Path("bin") / ("node.exe" if os.name == "nt" else "node")
-        node_path = str(bundled_node.resolve()) if bundled_node.is_file() else shutil.which("node")
+        node_path = resolve_node_runtime()
         options: dict[str, Any] = {
             "format": "bestaudio/best",
             "noplaylist": True,

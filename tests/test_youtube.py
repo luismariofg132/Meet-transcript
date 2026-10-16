@@ -627,3 +627,27 @@ import classscribe.youtube
 import classscribe.application.youtube
 """
     subprocess.run([sys.executable, "-c", script], check=True, timeout=15)
+
+
+def test_resolve_node_runtime(monkeypatch, tmp_path):
+    from classscribe import youtube
+
+    # Test 1: Bundled node found beside executable in bin/
+    app_root = tmp_path / "app"
+    bin_dir = app_root / "bin"
+    bin_dir.mkdir(parents=True)
+    exe_name = "node.exe" if sys.platform == "win32" else "node"
+    node_file = bin_dir / exe_name
+    node_file.write_bytes(b"")
+
+    monkeypatch.setattr(sys, "executable", str(app_root / "ClassScribe.exe"))
+    assert youtube.resolve_node_runtime() == str(node_file.resolve())
+
+    # Test 2: Fallback to PATH when no bundled node exists
+    empty_root = tmp_path / "empty_app"
+    empty_root.mkdir()
+    monkeypatch.setattr(sys, "executable", str(empty_root / "ClassScribe.exe"))
+    monkeypatch.setattr(
+        youtube.shutil, "which", lambda cmd: "/usr/bin/node" if cmd == "node" else None
+    )
+    assert youtube.resolve_node_runtime() == "/usr/bin/node"

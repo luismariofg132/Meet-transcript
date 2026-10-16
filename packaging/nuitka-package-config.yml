@@ -1,0 +1,37 @@
+- module-name: 'ctranslate2'
+  dlls:
+    - from_filenames:
+        prefixes:
+          - 'ctranslate2'
+          - 'cudnn'
+          - 'libiomp5md'
+      dest_path: 'ctranslate2'
+      when: 'win32'
+
+- module-name: 'nvidia.cublas'
+  dlls:
+    - from_filenames:
+        relative_path: 'bin'
+        prefixes:
+          - 'cublas'
+          - 'nvblas'
+      dest_path: 'nvidia/cublas/bin'
+      when: 'win32'
+
+- module-name: 'nvidia.cudnn'
+  dlls:
+    - from_filenames:
+        relative_path: 'bin'
+        prefixes:
+          - 'cudnn'
+      dest_path: 'nvidia/cudnn/bin'
+      when: 'win32'
+
+- module-name: 'nvidia.cuda_nvrtc'
+  dlls:
+    - from_filenames:
+        relative_path: 'bin'
+        prefixes:
+          - 'nvrtc'
+      dest_path: 'nvidia/cuda_nvrtc/bin'
+      when: 'win32'
